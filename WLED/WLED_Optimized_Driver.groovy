@@ -1,21 +1,20 @@
 /**
  *
- * WLED Universal Driver (Optimized for Hubitat Elevation)
+ * WLED Driver for Hubitat
  *
- * Original Author: bryan@joyful.house (GitHub repo: https://github.com/Aircoookie/WLED)
+ * Original Author: bryan@joyful.house (GitHub repo: https://github.com/joyfulhouse/WLED)
  * Optimized and Updated by: Oliver Beisser
 /**
  *
- * WLED Universal Driver (Optimized for Hubitat Elevation)
  *
  * Author: Original by bryan@joyful.house
  * Optimization & Refactoring: obeisser
  * Date: 2025-09-28
  *
- * Version: 16.0 (Stable Production Release)
+ * Version: 1.0 (Initial Release)
  *
  * -------------------------------------------------------------------------------------
- * Key Optimizations over Original Driver:
+ * Key Changes over Original Driver:
  * -------------------------------------------------------------------------------------
  *
  * - Fully Asynchronous: All network calls are non-blocking to keep the Hubitat hub responsive.

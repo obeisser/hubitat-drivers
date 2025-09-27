@@ -30,7 +30,7 @@
 import groovy.json.JsonOutput
 
 metadata {
-    definition (name: "WLED Optimized", namespace: "gemini", author: "Gemini AI & obeisser") {
+    definition (name: "WLED Optimized", namespace: "obeisser", author: "obeisser") {
         capability "Actuator"
         capability "Sensor"
         capability "Color Control"

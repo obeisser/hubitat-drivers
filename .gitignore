@@ -1,0 +1,15 @@
+# Ignore compiled Groovy classes
+*.class
+
+# Ignore IDE files
+*.iml
+.idea/
+*.log
+.vscode/
+*.swp
+*.swo
+
+# Ignore temporary files
+*.tmp
+*.swp
+.DS_Store

@@ -1,20 +1,24 @@
 /**
  *
- * WLED Driver for Hubitat
+ * WLED Driver for Hubitat Elevation
  *
- * Original Author: bryan@joyful.house (GitHub repo: https://github.com/joyfulhouse/WLED)
+ * Original Author: bryan@joyful.house (GitHub repo: https://github.com/Aircoookie/WLED)
  * Optimized and Updated by: Oliver Beisser
 /**
  *
+ * WLED Universal Driver (Optimized for Hubitat Elevation)
  *
  * Author: Original by bryan@joyful.house
  * Optimization & Refactoring: obeisser
  * Date: 2025-09-28
  *
- * Version: 1.0 (Initial Release)
+ * Version: 1.1
+ *
+ * - Add toggleEffectDirection() command to reverse effect animations.
+ * - Add effectDirection attribute to display the current direction (forward/reverse).
  *
  * -------------------------------------------------------------------------------------
- * Key Changes over Original Driver:
+ * Key Optimizations over Original Driver:
  * -------------------------------------------------------------------------------------
  *
  * - Fully Asynchronous: All network calls are non-blocking to keep the Hubitat hub responsive.
@@ -27,6 +31,7 @@
  * - Refactored with helper methods for logging and state updates.
  *
  */
+
 import groovy.json.JsonOutput
 
 metadata {
@@ -46,6 +51,7 @@ metadata {
         attribute "effectName", "string"
         attribute "paletteName", "string"
         attribute "presetValue", "number"
+        attribute "effectDirection", "string"
         
         command "setEffect", [
             [name:"effectId", type: "NUMBER", description: "Effect ID (0-255)"],
@@ -57,6 +63,7 @@ metadata {
             [name:"presetId", type: "NUMBER", description: "Preset ID"]
         ]
         command "forceRefresh"
+        command "toggleEffectDirection"
     }
     
     preferences {
@@ -98,7 +105,7 @@ def parse(hubitat.scheduling.AsyncResponse response, Map data = null) {
         }
         
         def msg = response.getJson()
-        debugLog("Response JSON: ${msg}")
+        if (logEnable) log.debug "Response JSON: ${msg}"
 
         if (!msg) {
             log.warn "Received empty or invalid JSON response."
@@ -118,7 +125,8 @@ def parse(hubitat.scheduling.AsyncResponse response, Map data = null) {
             }
         }
         else if (state.initialized) {
-            synchronize(msg.state ?: msg)
+            if (msg.state) { synchronize(msg.state) } 
+            else { synchronize(msg) }
         }
         else {
             log.warn "Driver not fully initialized. Ignoring partial state update. Waiting for full refresh."
@@ -130,7 +138,6 @@ def parse(hubitat.scheduling.AsyncResponse response, Map data = null) {
 
 //--- CAPABILITY COMMANDS ---//
 def on() { sendWledCommand([on:true, seg: [[id: ledSegment.toInteger(), on:true]]]) }
-
 def off() {
     def payload = [seg: [[id: ledSegment.toInteger(), on:false]]]
     if (powerOffParent) { payload.on = false }
@@ -138,7 +145,8 @@ def off() {
 }
 
 def setLevel(value, rate = null) {
-    value = Math.max(0, Math.min(value, 100)) // Clamp value between 0-100
+    if (value > 99) value = 100
+    if (value < 0) value = 0
     if (value == 0) { off() } 
     else {
         def brightness = (value * 2.55).toInteger()
@@ -155,7 +163,7 @@ def setColor(value) {
 }
 
 def setColorTemperature(value) {
-    debugLog("Setting color temperature to ${value}K")
+    if (logEnable) log.debug "Setting color temperature to ${value}K"
     def rgb = colorTempToRgb(value)
     def payload = [on: true, seg: [[id: ledSegment.toInteger(), on: true, col: [rgb], fx: 0]]]
     sendWledCommand(payload)
@@ -170,6 +178,14 @@ def refresh() { sendEthernetGet("/json/state") }
 def forceRefresh() {
     log.info "Forcing full refresh of state, effects, and palettes..."
     sendEthernetGet("/json")
+}
+
+def toggleEffectDirection() {
+    def currentDirection = device.currentValue("effectDirection")
+    boolean newReverseState = (currentDirection == "reverse") ? false : true
+    if (logEnable) log.debug "Toggling effect direction. Current: ${currentDirection}, New reverse state: ${newReverseState}"
+    def payload = [seg: [[id: ledSegment.toInteger(), rev: newReverseState]]]
+    sendWledCommand(payload)
 }
 
 def setEffect(Number effectId, Number speed = null, Number intensity = null, Number paletteId = null) {
@@ -189,44 +205,41 @@ def both() { strobe() }
 
 //--- SYNCHRONIZATION ---//
 private synchronize(wledState) {
-    debugLog("Synchronizing state...")
+    if (logEnable) log.debug "Synchronizing state..."
     if (!wledState) { log.warn "Synchronize called with null state."; return }
     
     def seg = wledState.seg?.find { it.id == settings.ledSegment.toInteger() }
-    if (!seg) {
-        log.warn "Segment ID ${settings.ledSegment} not found in state. Attempting recovery..."
-        runIn(2, forceRefresh)
-        return
-    }
+    if (!seg) { log.warn "Segment ID ${settings.ledSegment} not found in state. Cannot synchronize."; return }
     
     updateAttr("switch", seg.on ? "on" : "off")
-    def newLevel = seg.on ? (seg.bri / 2.55).round() : 0
+    
+    def brightness = seg.bri ?: 255
+    def newLevel = seg.on ? (brightness / 2.55).round() : 0
     updateAttr("level", newLevel, "%")
 
     def isEffect = seg.fx > 0
-
+    updateAttr("colorMode", isEffect ? "CT" : "RGB")
+    
     if (!isEffect && seg.col && seg.col[0]) {
         def rgb = seg.col[0]
         def estimatedKelvin = estimateColorTemperature(rgb[0], rgb[1], rgb[2])
         if (estimatedKelvin) {
             updateAttr("colorTemperature", estimatedKelvin)
-            updateAttr("colorMode", "CT")
             setGenericNameFromTemp(estimatedKelvin)
         } else {
             def hsv = rgbToHsv(rgb[0], rgb[1], rgb[2])
             updateAttr("hue", hsv.H)
             updateAttr("saturation", hsv.S)
-            updateAttr("colorMode", "RGB")
             setGenericNameFromHue(hsv.H)
         }
     } else {
-        updateAttr("colorMode", "CT")
         updateAttr("colorName", "Effect")
     }
 
     if (state.effects) { updateAttr("effectName", state.effects[seg.fx] ?: "Unknown") }
     if (state.palettes) { updateAttr("paletteName", state.palettes[seg.pal] ?: "Unknown") }
     updateAttr("presetValue", wledState.ps)
+    updateAttr("effectDirection", seg.rev ? "reverse" : "forward")
 }
 
 //--- HTTP COMMUNICATIONS ---//
@@ -255,10 +268,6 @@ private updateAttr(String attrName, newValue, String unit = "") {
     }
 }
 
-private debugLog(String msg) {
-    if (logEnable) log.debug msg
-}
-
 private setSchedule() {
     def interval = settings.refreshInterval.toInteger()
     if (interval == 0) { log.info "Polling disabled."; return }
@@ -279,6 +288,7 @@ private setSchedule() {
 
 //--- COLOR CONVERSION AND NAMING ---//
 private Integer estimateColorTemperature(int r, int g, int b) {
+    if (r == null || g == null || b == null) return null
     if (Math.abs(r - g) > 30 && Math.abs(r - b) > 30 && Math.abs(g - b) > 30) return null
     float r_f = r / 255.0f; float g_f = g / 255.0f; float b_f = b / 255.0f
     float max = Math.max(r_f, Math.max(g_f, b_f)); float min = Math.min(r_f, Math.min(g_f, b_f))
@@ -303,6 +313,7 @@ private List<Integer> hsvToRgb(float hue, float saturation, float value) {
 }
 
 private Map rgbToHsv(int r, int g, int b) {
+    if (r == null || g == null || b == null) return [H:0, S:0]
     float R = r / 255f; float G = g / 255f; float B = b / 255f
     float cmax = [R, G, B].max(); float cmin = [R, G, B].min(); float delta = cmax - cmin; float hue = 0
     if (delta != 0) {

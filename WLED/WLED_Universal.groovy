@@ -74,7 +74,7 @@ import groovy.transform.Field
 ]
 
 metadata {
-    definition (name: "WLED Optimized", namespace: "obeisser", author: "obeisser") {
+    definition (name: "WLED Universal", namespace: "obeisser", author: "obeisser") {
         capability "Actuator"
         capability "Sensor"
         capability "Color Control"

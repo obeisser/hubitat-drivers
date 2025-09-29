@@ -11,7 +11,7 @@
       "id": "4a2ff0a8-1dbd-4ce3-b4cd-bf4bc773b63b",
       "name": "WLED Universal",
       "namespace": "obeisser",
-      "location": "https://raw.githubusercontent.com/obeisser/hubitat-drivers/main/WLED/WLED-Universal.groovy",
+      "location": "https://raw.githubusercontent.com/obeisser/hubitat-drivers/refs/heads/main/WLED/WLED_Universal.groovy",
       "required": true,
       "version": "1.2"
     }

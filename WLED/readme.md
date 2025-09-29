@@ -1,6 +1,6 @@
 # Enhanced WLED Driver for Hubitat Elevation v1.2
 
-A comprehensive, enterprise-grade Hubitat Elevation driver for WLED devices with advanced features, name-based control, and robust error handling. Built upon the original work by Bryan Li and extensively enhanced for modern WLED installations.
+A comprehensive, Hubitat Elevation community driver for WLED devices with advanced features, name-based control, and robust error handling. Built upon the original work by Bryan Li and extensively enhanced for modern WLED installations.
 
 ## 🚀 Key Features
 
@@ -203,15 +203,32 @@ if (device.currentValue("connectionState") == "connected") {
 ## 🔄 Version History
 
 ### **v1.2 (Latest)**
-- Added name-based effect, palette, and playlist selection
-- Implemented smart matching with exact and partial fallbacks
-- Added comprehensive playlist support
-- Enhanced state variables with ID numbers
-- Added discovery commands for all WLED features
-- Implemented retry logic with exponential backoff
-- Added connection health monitoring
-- Enhanced error handling and recovery
-- Improved code organization and documentation
+
+**Added Features:**
+- Added effect selection by name with smart matching (exact and partial)
+- Added palette selection by name with intelligent fallback
+- Added comprehensive playlist support with name-based control
+- Added reverse effect switch capability for easier automation control
+- Added discovery commands: `listEffects()`, `listPalettes()`, `listPlaylists()`
+- Added device info tracking and firmware version reporting
+- Added support for additional WLED API endpoints (`/json/info`, `/json/playlists`)
+- Added new attributes: `effectId`, `paletteId`, `playlistId`, `playlistName`, `playlistState`, `reverse`
+- Added new commands: `reverseOn()`, `reverseOff()`, `getDeviceInfo()`, `testConnection()`
+
+**Improved Features:**
+- Improved state variables to show effect/palette/playlist IDs alongside names
+- Improved retry logic for failed network requests with exponential backoff
+- Improved error recovery and connection state management with health monitoring
+- Improved segment validation and error handling with detailed logging
+- Improved code organization with constants for better maintainability
+- Improved documentation and modular architecture
+
+**Fixed Issues:**
+- Fixed null pointer exceptions in state synchronization methods
+- Fixed boolean handling in switch and level calculations
+- Fixed @Field constant accessibility issues in Hubitat environment
+- Fixed device info parsing from WLED API response structure
+- Fixed playlist information handling with proper null safety
 
 ### **v1.1**
 - Added reverse effect direction control
@@ -255,4 +272,4 @@ if (device.currentValue("connectionState") == "connected") {
 
 ---
 
-*This driver represents a comprehensive solution for WLED control in Hubitat environments, providing enterprise-grade reliability with user-friendly features for both beginners and advanced users.*
+*This driver represents a comprehensive solution for WLED control in Hubitat environments with user-friendly features for both beginners and advanced users.*

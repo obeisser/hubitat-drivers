@@ -1,11 +1,13 @@
 # Hubitat Drivers Collection
 
-This repository contains community drivers for Hubitat Elevation. Each driver is organized in its own folder with documentation and source code.
+This repository contains a collection of community drivers for the Hubitat Elevation platform. Each driver is located in its own folder, complete with its own documentation and source code.
 
-## Included Drivers
+## Available Drivers
 
-- [WLED]Universal driver for WLED integration with Hubitat.
+* **[WLED Universal Driver](./WLED/)**: A fast, feature-rich, and resilient driver for controlling WLED devices.
+
+*(As you add more drivers, you can simply add them to this list.)*
 
 ## License
 
-This repository is licensed under the MIT License. See LICENSE for details.
+The drivers in this collection are licensed under the Apache License 2.0. You can find the full license text in the [LICENSE](./LICENSE) file.

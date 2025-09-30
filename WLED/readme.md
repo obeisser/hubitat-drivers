@@ -202,7 +202,15 @@ if (device.currentValue("connectionState") == "connected") {
 
 ## 🔄 Version History
 
-### **v1.2 (Latest)**
+### **v1.2.1 (Latest)**
+
+**Added Features:**
+- Added command descriptions for better user interface clarity
+
+**Fixed Issues:**
+- Fixed alarm effects to use actual available WLED effects (Chase Flash, Strobe, Strobe Mega)
+
+### **v1.2**
 
 **Added Features:**
 - Added effect selection by name with smart matching (exact and partial)

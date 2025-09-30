@@ -1,13 +1,21 @@
 /**
- * WLED Universal Driver (Optimized for Hubitat Elevation)
+ * WLED Universal Driver for Hubitat Elevation
  *
  * Author: Original by bryan@joyful.house
  * Optimization & Refactoring: obeisser
  * Enhanced by: Kiro AI Assistant
- * Date: 2025-09-29
- * Version: 1.2
+ * Date: 2025-09-30
+ * Version: 1.2.1
  *
- * Latest Changes (v1.2):
+ * Latest Changes (v1.2.1):
+ * 
+ * Added Features:
+ * - Added command descriptions for better user interface clarity
+ * 
+ * Fixed Issues:
+ * - Fixed alarm effects to use actual available WLED effects (Chase Flash, Strobe, Strobe Mega)
+ *
+ * Previous Changes (v1.2):
  * 
  * Added Features:
  * - Added effect selection by name with smart matching (exact and partial)
@@ -104,6 +112,7 @@ metadata {
         attribute "availablePlaylists", "string"
         attribute "playlistState", "string"
         
+        // Effect Control Commands
         command "setEffect", [
             [name:"effectId", type: "NUMBER", description: "Effect ID (0-255)"],
             [name:"speed", type: "NUMBER", description: "Relative Effect Speed (0-255)"],
@@ -119,25 +128,38 @@ metadata {
         command "setPaletteByName", [
             [name:"paletteName", type: "STRING", description: "Palette Name (e.g., 'Rainbow', 'Fire')"]
         ]
-        command "listEffects"
-        command "listPalettes"
+        command "listEffects", [[name:"List all available effects with ID numbers"]]
+        command "listPalettes", [[name:"List all available palettes with ID numbers"]]
+        
+        // Playlist Control Commands
         command "setPlaylist", [
             [name:"playlistId", type: "NUMBER", description: "Playlist ID (1-250)"]
         ]
         command "setPlaylistByName", [
             [name:"playlistName", type: "STRING", description: "Playlist Name"]
         ]
-        command "stopPlaylist"
-        command "listPlaylists"
+        command "stopPlaylist", [[name:"Stop currently running playlist"]]
+        command "listPlaylists", [[name:"List all available playlists with ID numbers"]]
+        
+        // Preset Control Commands
         command "setPreset", [
             [name:"presetId", type: "NUMBER", description: "Preset ID"]
         ]
-        command "forceRefresh"
-        command "toggleEffectDirection"
-        command "reverseOn"
-        command "reverseOff"
-        command "getDeviceInfo"
-        command "testConnection"
+        
+        // Effect Direction Control Commands
+        command "toggleEffectDirection", [[name:"Toggle effect animation direction (forward/reverse)"]]
+        command "reverseOn", [[name:"Turn effect reverse direction ON"]]
+        command "reverseOff", [[name:"Turn effect reverse direction OFF"]]
+        
+        // Alarm Control Commands
+        command "siren", [[name:"Activate siren alarm (Chase Flash effect with red colors)"]]
+        command "strobe", [[name:"Activate strobe alarm (white flashing strobe effect)"]]
+        command "both", [[name:"Activate both siren and strobe alarm (Strobe Mega effect with red/blue colors)"]]
+
+        // Diagnostics
+        command "forceRefresh", [[name:"Force refresh device state, effects, and palettes"]]
+        command "getDeviceInfo", [[name:"Get WLED firmware version and device information"]]
+        command "testConnection", [[name:"Test network connection to WLED device"]]
     }
     
     preferences {
@@ -458,9 +480,21 @@ def getPlaylists() {
 }
 
 //--- ALARM CAPABILITY ---//
-def siren() { setEffect(38, 255, 255, 0) }
-def strobe() { setEffect(23, 255, 255, 0) }
-def both() { strobe() }
+def siren() { 
+    // Use Chase Flash effect with Fire palette for intense red siren alarm
+    setEffectByName("Chase Flash", 255, 255, "Fire") 
+}
+
+def strobe() { 
+    // Use Strobe effect with white/default palette for visual alarm
+    setEffectByName("Strobe", 255, 255, "Default") 
+}
+
+def both() { 
+    // Use Lightning effect with Red & Blue palette for emergency alarm
+    // Strobe Mega provides intense, attention-grabbing multicolor strobe effect suitable for "both" alarm
+    setEffectByName("Strobe Mega", 255, 255, "Red & Blue") 
+}
 
 //--- SYNCHRONIZATION ---//
 private synchronizeState(wledState) {

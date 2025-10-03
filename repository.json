@@ -5,8 +5,8 @@
     {
       "id": "4a2ff0a8-1dbd-4ce3-b4cd-bf4bc773b63b",
       "name": "WLED Universal Driver",
-      "category": "Lighting",
-      "location": "https://raw.githubusercontent.com/obeisser/hubitat-drivers/main/packageManifest.json",
+      "category": "Lighting", 
+      "location": "https://raw.githubusercontent.com/obeisser/hubitat-drivers/main/WLED/packageManifest.json",
       "description": "An optimized and feature-rich driver for WLED controllers.",
       "tags": [
         "Lighting",

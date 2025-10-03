@@ -8,7 +8,7 @@
   "communityLink": "https://community.hubitat.com/t/157418",
   "drivers": [
     {
-      "id": "4a2ff0a8-1dbd-4ce3-b4cd-bf4bc773b63b",
+      "id": "d92495a7-145a-4a6c-a392-3589b3342337",
       "name": "WLED Universal",
       "namespace": "obeisser",
       "location": "https://raw.githubusercontent.com/obeisser/hubitat-drivers/main/WLED/WLED_Universal.groovy",

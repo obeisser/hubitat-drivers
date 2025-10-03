@@ -1,55 +1,45 @@
 /**
  * WLED Universal Driver for Hubitat Elevation
  *
- * Author: Original by bryan@joyful.house
- * Optimization & Refactoring: obeisser
- * Enhanced by: Kiro AI Assistant
- * Date: 2025-09-30
- * Version: 1.2.1
+ * Author: Oliver Beisser
+ * Original by bryan@joyful.house
  *
- * Latest Changes (v1.2.1):
- * 
- * Added Features:
- * - Added command descriptions for better user interface clarity
- * 
- * Fixed Issues:
- * - Fixed alarm effects to use actual available WLED effects (Chase Flash, Strobe, Strobe Mega)
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at:
  *
- * Previous Changes (v1.2):
- * 
- * Added Features:
- * - Added effect selection by name with smart matching (exact and partial)
- * - Added palette selection by name with intelligent fallback
- * - Added comprehensive playlist support with name-based control
- * - Added reverse effect switch capability for easier automation control
- * - Added discovery commands: listEffects(), listPalettes(), listPlaylists()
- * - Added device info tracking and firmware version reporting
- * - Added support for additional WLED API endpoints (/json/info, /json/playlists)
- * - Added new attributes: effectId, paletteId, playlistId, playlistName, playlistState, reverse
- * - Added new commands: reverseOn(), reverseOff(), getDeviceInfo(), testConnection()
- * 
- * Improved Features:
- * - Improved state variables to show effect/palette/playlist IDs alongside names
- * - Improved retry logic for failed network requests with exponential backoff
- * - Improved error recovery and connection state management with health monitoring
- * - Improved segment validation and error handling with detailed logging
- * - Improved code organization with constants for better maintainability
- * - Improved documentation and modular architecture
- * 
- * Fixed Issues:
- * - Fixed null pointer exceptions in state synchronization methods
- * - Fixed boolean handling in switch and level calculations
- * - Fixed @Field constant accessibility issues in Hubitat environment
- * - Fixed device info parsing from WLED API response structure
- * - Fixed playlist information handling with proper null safety
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
- * Key Features:
- * - Fully Asynchronous: All network calls are non-blocking
- * - Robust Initialization: State machine with proper error handling
- * - Resilient Error Handling: Auto-retry and self-healing capabilities
- * - Stable Scheduler: Pre-validated cron expressions
- * - Optimized API Calls: Efficient state synchronization
- * - Enhanced WLED API Coverage: Support for more WLED features
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ * for the specific language governing permissions and limitations under the License.
+ *
+ * Changelog
+ *
+ * v1.3.1 (2025-10-03)
+ * - fix: The setNightlight command now ensures the master power is turned on, providing a more intuitive user experience.
+ *
+ * v1.3.0 (2025-10-01)
+ * - feat: Added complete nightlight implementation with on/off and parameter control.
+ * - feat: Added nightlight status attributes for active state, duration, mode, and target brightness.
+ *
+ * v1.2.1 (2025-09-30)
+ * - feat: Added command descriptions for better user interface clarity.
+ * - fix: Corrected alarm effects to use actual available WLED effects.
+ *
+ * v1.2.0 (2025-09-29)
+ * - feat: Added name-based selection for effects, palettes, and playlists with smart matching.
+ * - feat: Added comprehensive playlist and reverse effect switch support.
+ * - feat: Added discovery commands (listEffects, listPalettes, listPlaylists) and device info tracking.
+ * - refactor: Improved retry logic, error recovery, and connection health monitoring.
+ * - refactor: Optimized state synchronization and code organization.
+ * - fix: Resolved null pointer exceptions and improved boolean handling.
+ *
+ * v1.1.0
+ * - refactor: Improved error handling and retry logic for network operations.
+ * - refactor: Enhanced state synchronization and attribute updates.
+ *
+ * v1.0.0
+ * - Initial release with asynchronous HTTP calls, robust error handling, and extensive WLED API coverage.
  */
 
 import groovy.json.JsonOutput
@@ -111,6 +101,10 @@ metadata {
         attribute "playlistId", "number"
         attribute "availablePlaylists", "string"
         attribute "playlistState", "string"
+        attribute "nightlightActive", "string"
+        attribute "nightlightDuration", "number"
+        attribute "nightlightMode", "string"
+        attribute "nightlightTargetBrightness", "number"
         
         // Effect Control Commands
         command "setEffect", [
@@ -156,6 +150,14 @@ metadata {
         command "strobe", [[name:"Activate strobe alarm (white flashing strobe effect)"]]
         command "both", [[name:"Activate both siren and strobe alarm (Strobe Mega effect with red/blue colors)"]]
 
+        // Nightlight Control Commands
+        command "setNightlight", [
+            [name:"duration", type: "NUMBER", description: "Duration in minutes (1-255)"],
+            [name:"mode", type: "ENUM", constraints: ["Instant", "Fade", "Color Fade", "Sunrise"], description: "Nightlight mode"],
+            [name:"targetBrightness", type: "NUMBER", description: "Target brightness (0-255)"]
+        ]
+        command "nightlightOff", []
+
         // Diagnostics
         command "forceRefresh", [[name:"Force refresh device state, effects, and palettes"]]
         command "getDeviceInfo", [[name:"Get WLED firmware version and device information"]]
@@ -176,7 +178,7 @@ metadata {
 
 //--- LIFECYCLE METHODS ---//
 def installed() {
-    log.info "Installing WLED Optimized Driver v1.2..."
+    log.info "Installing WLED Universal Driver v1.3.1..."
     initializeState()
     runIn(1, updated)
 }
@@ -479,6 +481,20 @@ def getPlaylists() {
     sendEthernetGet(WLED_ENDPOINTS.PLAYLISTS)
 }
 
+//--- NIGHTLIGHT COMMANDS ---//
+def setNightlight(Number duration, String mode, Number targetBrightness) {
+    if (logEnable) log.debug "Activating nightlight with duration: ${duration} min, mode: ${mode}, brightness: ${targetBrightness}"
+    def modeId = ["Instant":0, "Fade":1, "Color Fade":2, "Sunrise":3][mode]
+    def payload = [on: true, nl: [on: true, dur: duration, mode: modeId, tbri: targetBrightness]]
+    sendWledCommand(payload)
+}
+
+def nightlightOff() {
+    if (logEnable) log.debug "Deactivating nightlight"
+    def payload = [nl: [on: false]]
+    sendWledCommand(payload)
+}
+
 //--- ALARM CAPABILITY ---//
 def siren() { 
     // Use Chase Flash effect with Fire palette for intense red siren alarm
@@ -520,6 +536,9 @@ private synchronizeState(wledState) {
         
         // Update effect information
         updateEffectInformation(seg, wledState)
+
+        // Update nightlight information
+        updateNightlightInformation(wledState)
     } catch (Exception e) {
         log.error "Error synchronizing state: ${e.message}"
     }
@@ -614,6 +633,23 @@ private updateEffectInformation(seg, wledState) {
         }
     } catch (Exception e) {
         log.error "Error updating effect information: ${e.message}"
+    }
+}
+
+private updateNightlightInformation(wledState) {
+    try {
+        def nl = wledState?.nl
+        if (nl) {
+            updateAttr("nightlightActive", nl.on ? "on" : "off")
+            updateAttr("nightlightDuration", nl.dur)
+            def modeName = ["Wait", "Fade", "Color Fade", "Sunrise"][nl.mode ?: 0]
+            updateAttr("nightlightMode", modeName)
+            updateAttr("nightlightTargetBrightness", nl.tbri)
+        } else {
+            updateAttr("nightlightActive", "off")
+        }
+    } catch (Exception e) {
+        log.error "Error updating nightlight information: ${e.message}"
     }
 }
 

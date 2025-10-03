@@ -1,9 +1,9 @@
 {
   "packageName": "WLED Universal Driver",
   "author": "obeisser",
-  "version": "1.2.1",
+  "version": "1.3.1",
   "minimumHEVersion": "2.2.0",
-  "dateReleased": "2025-09-30",
+  "dateReleased": "2025-10-03",
   "documentationLink": "https://github.com/obeisser/hubitat-drivers/blob/main/WLED/readme.md",
   "communityLink": "https://community.hubitat.com/t/157418",
   "drivers": [
@@ -13,7 +13,7 @@
       "namespace": "obeisser",
       "location": "https://raw.githubusercontent.com/obeisser/hubitat-drivers/main/WLED/WLED_Universal.groovy",
       "required": true,
-      "version": "1.2.1"
+      "version": "1.3.1"
     }
   ]
 }

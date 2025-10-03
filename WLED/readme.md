@@ -1,4 +1,4 @@
-# Enhanced WLED Driver for Hubitat Elevation v1.2
+# Enhanced WLED Driver for Hubitat Elevation v1.3.1
 
 A comprehensive, Hubitat Elevation community driver for WLED devices with advanced features, name-based control, and robust error handling. Built upon the original work by Bryan Li and extensively enhanced for modern WLED installations.
 
@@ -9,6 +9,7 @@ A comprehensive, Hubitat Elevation community driver for WLED devices with advanc
 * **🔄 Reverse Effect Switch:** Easy automation control with dedicated on/off commands
 * **📋 Playlist Support:** Full playlist management with name-based selection
 * **🎯 Smart Matching:** Intelligent exact and partial name matching with fallbacks
+* **🌙 Nightlight Control:** Full nightlight implementation with parameter control
 
 ### **Enterprise Reliability**
 * **⚡️ Fully Asynchronous:** Non-blocking network calls keep your hub responsive
@@ -33,6 +34,12 @@ off()                   // Turn off
 setLevel(50)           // Set brightness to 50%
 setColor([hue: 120, saturation: 100, level: 75])
 setColorTemperature(3000)
+```
+
+### **Nightlight Control**
+```groovy
+setNightlight(10, "Fade", 50)  // Turn on nightlight for 10 mins, fade mode, 50/255 brightness
+nightlightOff()                // Turn off nightlight
 ```
 
 ### **Name-Based Control (New!)**
@@ -78,6 +85,12 @@ The driver provides comprehensive state information:
 - `colorName` - Human-readable color name
 - `connectionState` - Connection health (connected/error/testing)
 - `lastUpdate` - Last successful update timestamp
+
+### **Nightlight Information**
+- `nightlightActive` - `on` or `off`
+- `nightlightDuration` - Duration in minutes
+- `nightlightMode` - `Wait`, `Fade`, `Color Fade`, or `Sunrise`
+- `nightlightTargetBrightness` - Target brightness (0-255)
 
 ### **Effect Information**
 - `effectName` - Current effect name (e.g., "Rainbow")
@@ -202,7 +215,18 @@ if (device.currentValue("connectionState") == "connected") {
 
 ## 🔄 Version History
 
-### **v1.2.1 (Latest)**
+### **v1.3.1 (Latest)**
+
+**Fixed Issues:**
+- The `setNightlight` command now ensures the master power is turned on, providing a more intuitive user experience.
+
+### **v1.3.0**
+
+**Added Features:**
+- Added complete nightlight implementation with on/off and parameter control
+- Added nightlight status attributes: `nightlightActive`, `nightlightDuration`, `nightlightMode`, `nightlightTargetBrightness`
+
+### **v1.2.1**
 
 **Added Features:**
 - Added command descriptions for better user interface clarity

@@ -1,7 +1,7 @@
 /**
  *  Miele Dryer Driver
  *
- *  Copyright 2025, Your Name
+ *  Copyright 2025, Oliver Beisser
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -14,14 +14,14 @@
  *
  */
 metadata {
-    definition (name: "Miele Dryer", namespace: "your-namespace", author: "Your Name") {
+    definition (name: "Miele Dryer", namespace: "obeisser", author: "obeisser") {
         capability "Switch"
         capability "Refresh"
         capability "PowerMeter"
 
         attribute "operationState", "string"
         attribute "programName", "string"
-        attribute "remainingTime", "number", [unit: "min"]
+        attribute "remainingTime", "number"
         attribute "drynessLevel", "string"
         attribute "programPhase", "string"
 

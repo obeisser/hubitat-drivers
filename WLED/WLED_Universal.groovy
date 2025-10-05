@@ -16,17 +16,19 @@
  * Changelog
  *
  * v1.3.3 (2025-10-05)
- * - feat: Unified command interface - setEffect, setPalette, setPreset, and setPlaylist now accept either ID numbers or names for improved usability.
- * - refactor: Consolidated duplicate ID/name-based commands into single, more intuitive commands. Legacy ByName commands remain available for backward compatibility but are clearly marked in UI.
- * - feat: Added nextPresetInPlaylist command to advance through playlist presets (WLED v0.15+ feature).
- * - feat: Enhanced preset management - savePreset now accepts custom parameters (brightness, effect, palette, colors, etc.) with optional preset ID - if no ID provided, automatically finds next available slot (1-250).
- * - feat: Update existing presets - providing existing preset ID updates that preset, including name changes.
- * - feat: Added deletePreset command for preset management.
- * - fix: Corrected preset naming API - now uses "n" parameter instead of "pname" per WLED documentation.
- * - feat: Enhanced preset saving with proper WLED parameters (ib: include brightness, sb: save segment bounds).
- * - refactor: Consolidated use of NETWORK_CONFIG constants for timeouts, retries, and intervals.
- * - refactor: Simplified retry logic by removing redundant sendWledCommandWithRetry method.
- * - refactor: Improved code clarity with better timeout calculations and reduced redundant error handling.
+ * feat: Unified commands - setEffect, setPalette, setPreset, and setPlaylist now accept either ID numbers or names for improved usability (legacy ByName commands remain available)
+ * feat: Added nextPresetInPlaylist command to advance through playlist presets (WLED v0.15+ feature)
+ * feat: Enhanced preset management - savePreset now accepts custom parameters (brightness, effect, palette, colors, etc.) with optional preset ID
+ * feat: Update existing presets - providing existing preset ID updates that preset, including name changes
+ * feat: Added deletePreset command for comprehensive preset management
+ * feat: Intelligent color handling in savePreset - uses current segment primary color as default when only secondary color specified
+ * refactor: Consolidated use of NETWORK_CONFIG constants for timeouts, retries, and intervals
+ * refactor: Simplified retry logic by removing redundant sendWledCommandWithRetry method
+ * refactor: Improved code clarity with better timeout calculations and reduced redundant error handling
+ * refactor: Centralized playlist and preset updates in synchronizeState for consistency
+ * fix: Corrected preset naming API - now uses "n" parameter instead of "pname" per WLED documentation
+ * fix: Improved retryCommand method to handle both GET and POST request retries properly
+ * fix: Enhanced backward compatibility - existing Rule Machine rules using integer IDs continue to work seamlessly on the combined setEffect, setPalette, setPreset, and setPlaylist methods
  * 
  * v1.3.2 (2025-10-04)
  * - feat: Improve preset management and handeling, including loading, listing, setting by name, and saving presets.
@@ -87,7 +89,8 @@ import groovy.transform.Field
     DEFAULT_TIMEOUT: 5,
     MAX_RETRIES: 3,
     RETRY_DELAY: 2,
-    CONNECTION_CHECK_INTERVAL: 30
+    CONNECTION_CHECK_INTERVAL: 30,
+    CONNECTION_TIMEOUT_MULTIPLIER: 2000  // Convert seconds to milliseconds and allow 2x interval for timeout
 ]
 
 metadata {
@@ -237,7 +240,6 @@ def installed() {
 def updated() {
     log.info "Settings updated. Initializing..."
     state.initialized = false
-    state.retryCount = 0
     unschedule()
     
     // Add/remove deprecated commands based on user preference
@@ -260,7 +262,6 @@ def initialize() {
 private initializeState() {
     state.connectionState = "unknown"
     state.lastSuccessfulContact = now()
-    state.retryCount = 0
     state.presets = [:]
     state.playlists = [:]
     updateAttr("connectionState", "initializing")
@@ -286,7 +287,6 @@ def parse(hubitat.scheduling.AsyncResponse response, Map data = null) {
             return
         }
         
-        state.retryCount = 0
         state.lastSuccessfulContact = now()
         updateAttr("connectionState", "connected")
         updateAttr("lastUpdate", new Date().format("yyyy-MM-dd HH:mm:ss"))
@@ -352,9 +352,9 @@ private handleFullResponse(Map msg) {
 }
 
 //--- CAPABILITY COMMANDS ---//
-def on() { sendWledCommand([on:true, seg: [[id: ledSegment.toInteger(), on:true]]]) }
+def on() { sendWledCommand([on:true, seg: [[id: getCurrentSegmentId(), on:true]]]) }
 def off() {
-    def payload = [seg: [[id: ledSegment.toInteger(), on:false]]]
+    def payload = [seg: [[id: getCurrentSegmentId(), on:false]]]
     if (powerOffParent) { payload.on = false }
     sendWledCommand(payload)
 }
@@ -365,7 +365,7 @@ def setLevel(value, rate = null) {
     if (value == 0) { off() } 
     else {
         def brightness = (value * 2.55).toInteger()
-        sendWledCommand([on: true, seg: [[id: ledSegment.toInteger(), on: true, bri: brightness]]], rate)
+        sendWledCommand([on: true, seg: [[id: getCurrentSegmentId(), on: true, bri: brightness]]], rate)
     }
 }
 
@@ -428,39 +428,30 @@ private setEffectReverse(boolean reverse) {
     sendWledCommand(payload)
 }
 
-def setEffect(String effect, Number speed = null, Number intensity = null, String palette = null) {
-    def effectId = resolveEffectId(effect)
-    if (effectId == null) {
-        log.error "Effect '${effect}' not found. Available effects: ${getEffectsList()}"
-        return
-    }
+def setEffect(effectIdOrName, Number speed = null, Number intensity = null, paletteIdOrName = null) {
+    // Resolve effect parameter
+    def effectId = resolveParameter(effectIdOrName, "effect", "effect")
+    if (effectId == null) return
     
-    def paletteId = null
-    if (palette) {
-        paletteId = resolvePaletteId(palette)
-        if (paletteId == null) {
-            log.warn "Palette '${palette}' not found. Using current palette. Available palettes: ${getPalettesList()}"
-        }
-    }
+    // Resolve palette parameter (optional)
+    def paletteId = resolveParameter(paletteIdOrName, "palette", "palette", true)
     
-    if (logEnable) log.debug "Setting effect '${effect}' (ID: ${effectId}) with speed: ${speed}, intensity: ${intensity}, palette: ${palette} (ID: ${paletteId})"
+    if (logEnable) log.debug "Setting effect (ID: ${effectId}) with speed: ${speed}, intensity: ${intensity}, palette ID: ${paletteId}"
     
-    def seg = [id: ledSegment.toInteger(), fx: effectId.toInteger()]
+    def seg = [id: getCurrentSegmentId(), fx: effectId]
     if (speed != null) seg.sx = speed.toInteger()
     if (intensity != null) seg.ix = intensity.toInteger()
-    if (paletteId != null) seg.pal = paletteId.toInteger()
+    if (paletteId != null) seg.pal = paletteId
     sendWledCommand([on: true, seg: [seg]])
 }
 
-def setPalette(String palette) {
-    def paletteId = resolvePaletteId(palette)
-    if (paletteId == null) {
-        log.error "Palette '${palette}' not found. Available palettes: ${getPalettesList()}"
-        return
-    }
+def setPalette(paletteIdOrName) {
+    // Resolve palette parameter
+    def paletteId = resolveParameter(paletteIdOrName, "palette", "palette")
+    if (paletteId == null) return
     
-    if (logEnable) log.debug "Setting palette '${palette}' (ID: ${paletteId})"
-    def payload = [seg: [[id: settings.ledSegment.toInteger(), pal: paletteId]]]
+    if (logEnable) log.debug "Setting palette (ID: ${paletteId})"
+    def payload = [seg: [[id: getCurrentSegmentId(), pal: paletteId]]]
     sendWledCommand(payload)
 }
 
@@ -488,15 +479,13 @@ def listPalettes() {
     updateAttr("availablePalettes", palettesList)
 }
 
-def setPreset(String preset) {
-    def presetId = resolvePresetId(preset)
-    if (presetId == null) {
-        log.error "Preset '${preset}' not found. Available presets: ${getPresetsList()}"
-        return
-    }
+def setPreset(presetIdOrName) {
+    // Resolve preset parameter
+    def presetId = resolveParameter(presetIdOrName, "preset", "preset")
+    if (presetId == null) return
     
-    if (logEnable) log.debug "Activating preset '${preset}' (ID: ${presetId})"
-    sendWledCommand([ps: presetId.toInteger()])
+    if (logEnable) log.debug "Activating preset (ID: ${presetId})"
+    sendWledCommand([ps: presetId])
 }
 
 def savePreset(String presetName, Number presetId = null, Number brightness = null, String effect = null, String palette = null, Number speed = null, Number intensity = null, String primaryColor = null, String secondaryColor = null) {
@@ -534,7 +523,15 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
     
     // Build the state object for the preset
     def presetState = [:]
-    def segmentConfig = [id: settings.ledSegment.toInteger()]
+    
+    // Validate and collect all segment parameters first
+    def segmentId = settings.ledSegment.toInteger()
+    def segmentBrightness = null
+    def segmentEffectId = null
+    def segmentPaletteId = null
+    def segmentSpeed = null
+    def segmentIntensity = null
+    def segmentColors = []
     
     // Add brightness if specified
     if (brightness != null) {
@@ -543,27 +540,19 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
             return
         }
         presetState.bri = brightness.toInteger()
-        segmentConfig.bri = brightness.toInteger()
+        segmentBrightness = brightness.toInteger()
     }
     
     // Add effect if specified
     if (effect != null) {
-        def effectId = resolveEffectId(effect)
-        if (effectId == null) {
-            log.error "Effect '${effect}' not found. Available effects: ${getEffectsList()}"
-            return
-        }
-        segmentConfig.fx = effectId
+        segmentEffectId = resolveParameter(effect, "effect", "effect")
+        if (segmentEffectId == null) return
     }
     
     // Add palette if specified
     if (palette != null) {
-        def paletteId = resolvePaletteId(palette)
-        if (paletteId == null) {
-            log.error "Palette '${palette}' not found. Available palettes: ${getPalettesList()}"
-            return
-        }
-        segmentConfig.pal = paletteId
+        segmentPaletteId = resolveParameter(palette, "palette", "palette")
+        if (segmentPaletteId == null) return
     }
     
     // Add speed if specified
@@ -572,7 +561,7 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
             log.error "Invalid speed: ${speed}. Must be between 0-255."
             return
         }
-        segmentConfig.sx = speed.toInteger()
+        segmentSpeed = speed.toInteger()
     }
     
     // Add intensity if specified
@@ -581,18 +570,17 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
             log.error "Invalid intensity: ${intensity}. Must be between 0-255."
             return
         }
-        segmentConfig.ix = intensity.toInteger()
+        segmentIntensity = intensity.toInteger()
     }
     
     // Add colors if specified
-    def colors = []
     if (primaryColor != null) {
         def rgb = parseHexColor(primaryColor)
         if (rgb == null) {
             log.error "Invalid primary color format: ${primaryColor}. Use hex format like 'FF0000'."
             return
         }
-        colors.add(rgb)
+        segmentColors.add(rgb)
     }
     
     if (secondaryColor != null) {
@@ -602,15 +590,31 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
             return
         }
         // Ensure we have primary color slot filled
-        if (colors.size() == 0) {
-            colors.add([255, 255, 255]) // Default white for primary if not specified
+        if (segmentColors.size() == 0) {
+            // Use current segment's primary color as default, fallback to white
+            // NOTE: Explicit null checking used instead of chained safe navigation (currentSegment?.col?[0])
+            // because Hubitat's Groovy parser has issues with complex safe navigation + array access syntax
+            def defaultPrimary = [255, 255, 255] // Default to white
+            def currentSegment = state.segments?.find { it.id == segmentId }
+            if (currentSegment && currentSegment.col && currentSegment.col.size() > 0) {
+                defaultPrimary = currentSegment.col[0]
+            }
+            segmentColors.add(defaultPrimary)
+            if (logEnable) log.debug "Using current segment primary color as default: ${defaultPrimary}"
         }
-        colors.add(rgb)
+        segmentColors.add(rgb)
     }
     
-    if (colors.size() > 0) {
-        segmentConfig.col = colors
-    }
+    // Build segment configuration map all at once
+    // NOTE: Using conditional assignment instead of dynamic property addition to avoid
+    // Hubitat Groovy parser issues with maps initialized using literal syntax
+    def segmentConfig = [id: segmentId]
+    if (segmentBrightness != null) segmentConfig.bri = segmentBrightness
+    if (segmentEffectId != null) segmentConfig.fx = segmentEffectId
+    if (segmentPaletteId != null) segmentConfig.pal = segmentPaletteId
+    if (segmentSpeed != null) segmentConfig.sx = segmentSpeed
+    if (segmentIntensity != null) segmentConfig.ix = segmentIntensity
+    if (segmentColors.size() > 0) segmentConfig.col = segmentColors
     
     // Add segment configuration to preset state
     presetState.seg = [segmentConfig]
@@ -694,19 +698,12 @@ def getPresets() {
     sendEthernetGet(WLED_ENDPOINTS.PRESETS)
 }
 
-def setPlaylist(String playlist) {
-    def playlistId = resolvePlaylistId(playlist)
-    if (playlistId == null) {
-        log.error "Playlist '${playlist}' not found. Available playlists: ${getPlaylistsList()}"
-        return
-    }
+def setPlaylist(playlistIdOrName) {
+    // Resolve playlist parameter
+    def playlistId = resolveParameter(playlistIdOrName, "playlist", "playlist")
+    if (playlistId == null) return
     
-    if (playlistId < 1 || playlistId > 250) {
-        log.error "Invalid playlist ID: ${playlistId}. Must be between 1-250."
-        return
-    }
-    
-    if (logEnable) log.debug "Starting playlist '${playlist}' (ID: ${playlistId})"
+    if (logEnable) log.debug "Starting playlist (ID: ${playlistId})"
     sendWledCommand([playlist: [ps: playlistId, on: true]])
 }
 
@@ -814,7 +811,7 @@ private synchronizeState(wledState) {
         updateColorInformation(seg)
         
         // Update effect, playlist, and preset information
-        updateEffectInformation(seg, wledState)
+        updateEffectInformation(seg)
         updatePlaylistInformation(wledState)
         updatePresetInformation(wledState)
 
@@ -872,40 +869,40 @@ private updateColorInformation(seg) {
     }
 }
 
-private updateEffectInformation(seg, wledState) {
+private updateEffectInformation(seg) {
     try {
+        def effectAttrs = [:]
+        
         // Update effect information with ID numbers
-        updateAttr("effectId", seg?.fx ?: 0)
-        updateAttr("paletteId", seg?.pal ?: 0)
+        def effectId = seg?.fx ?: 0
+        def paletteId = seg?.pal ?: 0
+        
+        effectAttrs.effectId = effectId
+        effectAttrs.paletteId = paletteId
         
         if (state.effects) { 
-            def effectId = seg?.fx ?: 0
-            updateAttr("effectName", state.effects[effectId] ?: "Unknown") 
+            effectAttrs.effectName = state.effects[effectId] ?: "Unknown"
         }
         if (state.palettes) { 
-            def paletteId = seg?.pal ?: 0
-            updateAttr("paletteName", state.palettes[paletteId] ?: "Unknown") 
+            effectAttrs.paletteName = state.palettes[paletteId] ?: "Unknown"
         }
-        
-        updateAttr("presetValue", wledState?.ps ?: 0)
-        
-        // Update playlist information
-        updatePlaylistInformation(wledState)
         
         def isReverse = seg?.rev ?: false
-        updateAttr("effectDirection", isReverse ? "reverse" : "forward")
-        updateAttr("reverse", isReverse ? "on" : "off")
+        effectAttrs.effectDirection = isReverse ? "reverse" : "forward"
+        effectAttrs.reverse = isReverse ? "on" : "off"
         
-        // Update available lists when effects/palettes are loaded
+        // Update available lists when effects/palettes are loaded (only if not already set)
         if (state.effects && !device.currentValue("availableEffects")) {
-            updateAttr("availableEffects", getEffectsList())
+            effectAttrs.availableEffects = getEffectsList()
         }
         if (state.palettes && !device.currentValue("availablePalettes")) {
-            updateAttr("availablePalettes", getPalettesList())
+            effectAttrs.availablePalettes = getPalettesList()
         }
         if (state.playlists && !device.currentValue("availablePlaylists")) {
-            updateAttr("availablePlaylists", getPlaylistsList())
+            effectAttrs.availablePlaylists = getPlaylistsList()
         }
+        
+        batchUpdateAttributes(effectAttrs)
     } catch (Exception e) {
         log.error "Error updating effect information: ${e.message}"
     }
@@ -914,24 +911,28 @@ private updateEffectInformation(seg, wledState) {
 private updateNightlightInformation(wledState) {
     try {
         def nl = wledState?.nl
+        def nightlightAttrs = [:]
+        
         if (nl) {
-            updateAttr("nightlightActive", nl.on ? "on" : "off")
-            updateAttr("nightlightDuration", nl.dur ?: 0)
+            nightlightAttrs.nightlightActive = nl.on ? "on" : "off"
+            nightlightAttrs.nightlightDuration = nl.dur ?: 0
             def modeName = ["Instant", "Fade", "Color Fade", "Sunrise"][nl.mode ?: 0]
-            updateAttr("nightlightMode", modeName)
-            updateAttr("nightlightTargetBrightness", nl.tbri ?: 0)
+            nightlightAttrs.nightlightMode = modeName
+            nightlightAttrs.nightlightTargetBrightness = nl.tbri ?: 0
             
             // Track remaining time if available (WLED v0.10.2+)
             if (nl.rem != null) {
-                updateAttr("nightlightRemaining", nl.rem)
+                nightlightAttrs.nightlightRemaining = nl.rem
             }
         } else {
-            updateAttr("nightlightActive", "off")
-            updateAttr("nightlightDuration", 0)
-            updateAttr("nightlightMode", "Instant")
-            updateAttr("nightlightTargetBrightness", 0)
-            updateAttr("nightlightRemaining", -1)
+            nightlightAttrs.nightlightActive = "off"
+            nightlightAttrs.nightlightDuration = 0
+            nightlightAttrs.nightlightMode = "Instant"
+            nightlightAttrs.nightlightTargetBrightness = 0
+            nightlightAttrs.nightlightRemaining = -1
         }
+        
+        batchUpdateAttributes(nightlightAttrs)
     } catch (Exception e) {
         log.error "Error updating nightlight information: ${e.message}"
     }
@@ -957,10 +958,17 @@ private handleDeviceInfo(deviceInfo) {
 }
 
 //--- HTTP COMMUNICATIONS ---//
-private sendWledCommand(Map payload, Number transitionRate = null) {
+private sendWledCommand(Map payload, Number transitionRate = null, Map retryData = null) {
     payload.v = true
     payload.tt = (transitionRate != null) ? (transitionRate * 100).toInteger() : settings.transitionTime.toInteger()
-    sendEthernetPost(WLED_ENDPOINTS.STATE, JsonOutput.toJson(payload))
+    
+    def jsonBody = JsonOutput.toJson(payload)
+    def data = retryData ?: [:]
+    data.payload = payload
+    data.transitionRate = transitionRate
+    data.body = jsonBody
+    
+    sendEthernetPost(WLED_ENDPOINTS.STATE, jsonBody, data)
 }
 
 
@@ -1017,23 +1025,35 @@ private handleNetworkError(String errorMessage, Map data = null) {
     log.warn "Network error: ${errorMessage}"
     updateAttr("connectionState", "error")
     
-    if (!settings.enableRetry || !data || !data.retryCount) return
+    if (!settings.enableRetry || !data) return
     
-    def retryCount = data.retryCount + 1
+    // Initialize retry count if not present
+    data.retryCount = (data.retryCount ?: 0) + 1
+    def retryCount = data.retryCount
+    
     if (retryCount <= NETWORK_CONFIG.MAX_RETRIES) {
         log.info "Retrying command in ${NETWORK_CONFIG.RETRY_DELAY} seconds (attempt ${retryCount}/${NETWORK_CONFIG.MAX_RETRIES})"
-        runIn(NETWORK_CONFIG.RETRY_DELAY, "retryCommand", [data: data])
+        runIn(NETWORK_CONFIG.RETRY_DELAY, "executeRetry", [data: data])
     } else {
         log.error "Max retry attempts (${NETWORK_CONFIG.MAX_RETRIES}) exceeded. Command failed permanently."
     }
 }
 
-def retryCommand(Map data) {
-    if (data.payload) {
-        log.info "Retrying WLED command (attempt ${data.retryCount + 1})"
-        sendWledCommand(data.payload, data.transitionRate)
+def executeRetry(Map data) {
+    if (data.body && data.path) {
+        // Retry POST request with original body
+        log.info "Retrying POST command to ${data.path} (attempt ${data.retryCount})"
+        sendEthernetPost(data.path, data.body, data)
+    } else if (data.path) {
+        // Retry GET request
+        log.info "Retrying GET command to ${data.path} (attempt ${data.retryCount})"
+        sendEthernetGet(data.path, data)
+    } else {
+        log.error "Cannot retry command - missing required data"
     }
 }
+
+
 
 
 
@@ -1044,9 +1064,9 @@ def retryCommand(Map data) {
 def checkConnection() {
     if (!settings.connectionMonitoring) return
     
-    def CONNECTION_TIMEOUT_MS = NETWORK_CONFIG.CONNECTION_CHECK_INTERVAL * 2000 // 60 seconds
+    def timeoutMs = NETWORK_CONFIG.CONNECTION_CHECK_INTERVAL * NETWORK_CONFIG.CONNECTION_TIMEOUT_MULTIPLIER
     def timeSinceLastContact = now() - (state.lastSuccessfulContact ?: 0)
-    if (timeSinceLastContact > CONNECTION_TIMEOUT_MS) {
+    if (timeSinceLastContact > timeoutMs) {
         log.warn "No successful contact with WLED device for ${timeSinceLastContact/1000} seconds"
         updateAttr("connectionState", "disconnected")
         testConnection()
@@ -1057,6 +1077,124 @@ def checkConnection() {
 }
 
 //--- HELPER METHODS ---//
+
+/**
+ * Get the current LED segment ID with safe handling of null/invalid values
+ * @return Integer segment ID, defaults to 0 if invalid
+ */
+private Integer getCurrentSegmentId() {
+    def segmentId = settings.ledSegment?.toInteger() ?: 0
+    if (segmentId < 0 || segmentId > WLED_LIMITS.MAX_SEGMENTS) {
+        log.warn "Invalid segment ID ${segmentId}, using default segment 0"
+        return 0
+    }
+    return segmentId
+}
+
+/**
+ * Universal parameter resolver that handles both numeric IDs and string names/IDs
+ * @param paramValue The parameter value (can be Number or String)
+ * @param paramType The type of parameter ("effect", "palette", "preset", "playlist")
+ * @param paramName Human-readable parameter name for error messages
+ * @param isOptional Whether the parameter is optional (affects error handling)
+ * @return The resolved ID as Integer, or null if not found/invalid
+ */
+private Integer resolveParameter(paramValue, String paramType, String paramName, boolean isOptional = false) {
+    if (paramValue == null) {
+        return null
+    }
+    
+    def resolvedId = null
+    
+    // Handle numeric parameters (direct ID)
+    if (paramValue instanceof Number) {
+        resolvedId = paramValue.toInteger()
+        if (logEnable) log.debug "Using ${paramName} ID: ${resolvedId}"
+        
+        // Validate ID ranges based on parameter type
+        if (!validateParameterRange(resolvedId, paramType)) {
+            log.error "Invalid ${paramName} ID: ${resolvedId}. ${getValidRangeMessage(paramType)}"
+            return null
+        }
+        
+    } else if (paramValue instanceof String) {
+        // Use appropriate resolver based on parameter type
+        switch (paramType) {
+            case "effect":
+                resolvedId = resolveEffectId(paramValue.toString())
+                break
+            case "palette":
+                resolvedId = resolvePaletteId(paramValue.toString())
+                break
+            case "preset":
+                resolvedId = resolvePresetId(paramValue.toString())
+                break
+            case "playlist":
+                resolvedId = resolvePlaylistId(paramValue.toString())
+                break
+            default:
+                log.error "Unknown parameter type: ${paramType}"
+                return null
+        }
+        
+        if (resolvedId == null) {
+            def errorLevel = isOptional ? "warn" : "error"
+            def availableList = getAvailableListForType(paramType)
+            log."${errorLevel}" "${paramName.capitalize()} '${paramValue}' not found. Available ${paramType}s: ${availableList}"
+            return null
+        }
+        
+        if (logEnable) log.debug "Found ${paramName} '${paramValue}' with ID: ${resolvedId}"
+        
+    } else {
+        log.error "Invalid ${paramName} parameter type. Expected Number (ID) or String (name), got: ${paramValue}"
+        return null
+    }
+    
+    return resolvedId
+}
+
+private boolean validateParameterRange(Integer id, String paramType) {
+    switch (paramType) {
+        case "effect":
+        case "palette":
+            return id >= 0 && id <= 255
+        case "preset":
+        case "playlist":
+            return id >= 1 && id <= 250
+        default:
+            return true
+    }
+}
+
+private String getValidRangeMessage(String paramType) {
+    switch (paramType) {
+        case "effect":
+        case "palette":
+            return "Must be between 0-255"
+        case "preset":
+        case "playlist":
+            return "Must be between 1-250"
+        default:
+            return "Invalid range"
+    }
+}
+
+private String getAvailableListForType(String paramType) {
+    switch (paramType) {
+        case "effect":
+            return getEffectsList()
+        case "palette":
+            return getPalettesList()
+        case "preset":
+            return getPresetsList()
+        case "playlist":
+            return getPlaylistsList()
+        default:
+            return "Unknown type"
+    }
+}
+
 private updateAttr(String attrName, newValue, String unit = "") {
     try {
         def currentValue = device.currentValue(attrName)
@@ -1070,6 +1208,36 @@ private updateAttr(String attrName, newValue, String unit = "") {
             sendEvent(name: attrName, value: newValue, unit: unit)
         } catch (Exception e2) {
             log.error "Failed to send event for ${attrName}: ${e2.message}"
+        }
+    }
+}
+
+/**
+ * Batch update multiple attributes efficiently
+ * @param attributes Map of attribute names to values [attrName: value, ...]
+ * @param unit Optional unit string to apply to all attributes
+ */
+private batchUpdateAttributes(Map attributes, String unit = "") {
+    try {
+        def events = []
+        attributes.each { attrName, newValue ->
+            def currentValue = device.currentValue(attrName)
+            if ("${currentValue}" != "${newValue}") {
+                events.add([name: attrName, value: newValue, unit: unit])
+            }
+        }
+        
+        if (events.size() > 0) {
+            if (logEnable) log.debug "Batch updating ${events.size()} attributes: ${events.collect{it.name}.join(', ')}"
+            events.each { event ->
+                sendEvent(event)
+            }
+        }
+    } catch (Exception e) {
+        log.error "Error in batch attribute update: ${e.message}"
+        // Fallback to individual updates
+        attributes.each { attrName, newValue ->
+            updateAttr(attrName, newValue, unit)
         }
     }
 }
@@ -1487,23 +1655,31 @@ private Integer findNextAvailablePresetId() {
 private updatePresetInformation(wledState) {
     try {
         def currentPresetId = wledState?.ps
+        def presetAttrs = [:]
+        
         if (currentPresetId && currentPresetId > 0) {
-            updateAttr("presetValue", currentPresetId)
+            presetAttrs.presetValue = currentPresetId
             
             if (state.presets && state.presets[currentPresetId.toString()]) {
                 def presetName = state.presets[currentPresetId.toString()].n ?: "Unnamed Preset"
-                updateAttr("presetName", presetName)
+                presetAttrs.presetName = presetName
             } else {
-                updateAttr("presetName", "Unknown Preset")
+                presetAttrs.presetName = "Unknown Preset"
             }
         } else {
-            updateAttr("presetValue", 0)
-            updateAttr("presetName", "None")
+            presetAttrs.presetValue = 0
+            presetAttrs.presetName = "None"
         }
+        
+        batchUpdateAttributes(presetAttrs)
     } catch (Exception e) {
         if (logEnable) log.debug "Error updating preset information: ${e.message}"
-        updateAttr("presetValue", 0)
-        updateAttr("presetName", "None")
+        // Fallback to safe defaults
+        def fallbackAttrs = [
+            presetValue: 0,
+            presetName: "None"
+        ]
+        batchUpdateAttributes(fallbackAttrs)
     }
 }
 
@@ -1583,25 +1759,33 @@ private updatePlaylistInformation(wledState) {
         // Check if a playlist is currently running
         // Note: WLED API uses 'pl' for current playlist ID in state response
         def currentPlaylistId = wledState?.pl
+        def playlistAttrs = [:]
+        
         if (currentPlaylistId && currentPlaylistId > 0) {
-            updateAttr("playlistId", currentPlaylistId)
-            updateAttr("playlistState", "running")
+            playlistAttrs.playlistId = currentPlaylistId
+            playlistAttrs.playlistState = "running"
             
             if (state.playlists && state.playlists[currentPlaylistId.toString()]) {
                 def playlistName = state.playlists[currentPlaylistId.toString()].n ?: "Unnamed Playlist"
-                updateAttr("playlistName", playlistName)
+                playlistAttrs.playlistName = playlistName
             } else {
-                updateAttr("playlistName", "Unknown Playlist")
+                playlistAttrs.playlistName = "Unknown Playlist"
             }
         } else {
-            updateAttr("playlistId", 0)
-            updateAttr("playlistState", "none")
-            updateAttr("playlistName", "None")
+            playlistAttrs.playlistId = 0
+            playlistAttrs.playlistState = "none"
+            playlistAttrs.playlistName = "None"
         }
+        
+        batchUpdateAttributes(playlistAttrs)
     } catch (Exception e) {
         if (logEnable) log.debug "Error updating playlist information: ${e.message}"
-        updateAttr("playlistId", 0)
-        updateAttr("playlistState", "none")
-        updateAttr("playlistName", "None")
+        // Fallback to safe defaults
+        def fallbackAttrs = [
+            playlistId: 0,
+            playlistState: "none", 
+            playlistName: "None"
+        ]
+        batchUpdateAttributes(fallbackAttrs)
     }
 }

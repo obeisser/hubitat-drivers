@@ -1,27 +1,27 @@
-# Enhanced WLED Driver for Hubitat Elevation v1.3.1
+# Enhanced WLED Driver for Hubitat Elevation v1.3.4
 
 A comprehensive, Hubitat Elevation community driver for WLED devices with advanced features, name-based control, and robust error handling. Built upon the original work by Bryan Li and extensively enhanced for modern WLED installations.
 
 ## 🚀 Key Features
 
 ### **Smart Control**
-* **🎨 Name-Based Selection:** Control effects, palettes, and playlists by name instead of numbers
-* **🔄 Reverse Effect Switch:** Easy automation control with dedicated on/off commands
-* **📋 Playlist Support:** Full playlist management with name-based selection
-* **🎯 Smart Matching:** Intelligent exact and partial name matching with fallbacks
-* **🌙 Nightlight Control:** Full nightlight implementation with parameter control
+* **🎨 Unified Control:** Control effects, palettes, presets, and playlists by name OR ID number.
+* **🔄 Reverse Effect Switch:** Easy automation control with dedicated on/off commands.
+* **📋 Advanced Preset Management:** Save, update, and delete presets with detailed parameter control.
+* **🎯 Smart Matching:** Intelligent exact and partial name matching for all commands.
+* **🌙 Nightlight Control:** Full nightlight implementation with parameter control.
 
-### **Enterprise Reliability**
-* **⚡️ Fully Asynchronous:** Non-blocking network calls keep your hub responsive
-* **🔄 Auto-Retry Logic:** Automatic retry with exponential backoff for failed requests
-* **💓 Health Monitoring:** Connection state tracking with automatic recovery
-* **🛡️ Error Resilience:** Self-healing from network issues and API errors
+### **Reliability**
+* **⚡️ Fully Asynchronous:** Non-blocking network calls keep your hub responsive.
+* **🔄 Auto-Retry Logic:** Automatic retry with exponential backoff for failed requests.
+* **💓 Health Monitoring:** Connection state tracking with automatic recovery.
+* **🛡️ Error Resilience:** Self-healing from network issues and API errors.
 
 ### **Advanced Features**
-* **📊 Enhanced State Variables:** Shows both names and ID numbers for all attributes
-* **🔍 Discovery Commands:** List all available effects, palettes, and playlists
-* **📱 Dashboard Compatible:** Perfect integration with Hubitat dashboards
-* **🎛️ Complete WLED API:** Supports segments, presets, effects, palettes, and playlists
+* **📊 Enhanced State Variables:** Shows both names and ID numbers for all attributes.
+* **🔍 Discovery Commands:** List all available effects, palettes, and playlists.
+* **📱 Dashboard Compatible:** Perfect integration with Hubitat dashboards.
+* **🎛️ Complete WLED API:** Supports segments, presets, effects, palettes, and playlists.
 
 ---
 
@@ -36,25 +36,45 @@ setColor([hue: 120, saturation: 100, level: 75])
 setColorTemperature(3000)
 ```
 
+### **Unified Control (Name or ID)**
+```groovy
+// All commands accept either a name or an ID number
+setEffect("Rainbow", 150, 200, "Party")  // Set effect by name, with speed, intensity, and palette
+setEffect(9, 128, 128, 11)              // Same command works with IDs
+
+setPalette("Ocean")                     // Set palette by name
+setPalette(22)                          // Set palette by ID
+
+setPreset("My Favorite")                // Set preset by name
+setPreset(5)                            // Set preset by ID
+
+setPlaylist("Evening Routine")          // Set playlist by name
+setPlaylist(3)                          // Set playlist by ID
+```
+
+### **Advanced Preset Management**
+```groovy
+// Save current state to a new preset with an auto-assigned ID
+saveCurrentAsPreset("My New Look")
+
+// Save current state, overwriting preset ID 15
+saveCurrentAsPreset("My Updated Look", 15)
+
+// Create a complex new preset (or update existing) with custom parameters
+// Creates preset with ID 11, name "Red Alert", brightness 200, Strobe effect, and red color
+savePreset("Red Alert", 11, 200, "Strobe", null, 255, 255, "FF0000")
+
+// Delete preset by ID
+deletePreset(12)
+
+// Advance to the next preset in the running playlist
+nextPresetInPlaylist()
+```
+
 ### **Nightlight Control**
 ```groovy
 setNightlight(10, "Fade", 50)  // Turn on nightlight for 10 mins, fade mode, 50/255 brightness
 nightlightOff()                // Turn off nightlight
-```
-
-### **Name-Based Control (New!)**
-```groovy
-setEffectByName("Rainbow", 150, 200, "Rainbow")  // Effect, speed, intensity, palette
-setEffectByName("Fire 2012", 255, 255)          // Just effect and parameters
-setPaletteByName("Ocean")                        // Change palette by name
-setPlaylistByName("Evening Routine")             // Start playlist by name
-```
-
-### **Traditional ID Control**
-```groovy
-setEffect(9, 128, 128, 11)    // Effect ID, speed, intensity, palette ID
-setPreset(5)                  // Load preset 5
-setPlaylist(3)                // Start playlist 3
 ```
 
 ### **Reverse Effect Control**
@@ -68,126 +88,97 @@ toggleEffectDirection()  // Toggle current direction
 ```groovy
 listEffects()           // Show all available effects with IDs
 listPalettes()          // Show all available palettes with IDs
+listPresets()           // Show all available presets with IDs
 listPlaylists()         // Show all available playlists with IDs
 getDeviceInfo()         // Get WLED firmware version and device info
 testConnection()        // Test connection health
+forceRefresh()          // Force a full refresh of all data from the device
 ```
 
 ---
 
 ## 📊 State Variables
 
-The driver provides comprehensive state information:
-
-### **Current Status**
-- `switch` - On/off state
-- `level` - Brightness percentage
-- `colorName` - Human-readable color name
-- `connectionState` - Connection health (connected/error/testing)
-- `lastUpdate` - Last successful update timestamp
-
-### **Nightlight Information**
-- `nightlightActive` - `on` or `off`
-- `nightlightDuration` - Duration in minutes
-- `nightlightMode` - `Wait`, `Fade`, `Color Fade`, or `Sunrise`
-- `nightlightTargetBrightness` - Target brightness (0-255)
-
-### **Effect Information**
-- `effectName` - Current effect name (e.g., "Rainbow")
-- `effectId` - Current effect ID number (e.g., 9)
-- `effectDirection` - Effect direction (forward/reverse)
-- `reverse` - Reverse switch state (on/off)
-
-### **Palette Information**
-- `paletteName` - Current palette name (e.g., "Rainbow")
-- `paletteId` - Current palette ID number (e.g., 11)
-
-### **Playlist Information**
-- `playlistName` - Current playlist name (e.g., "Evening Routine")
-- `playlistId` - Current playlist ID number (e.g., 5)
-- `playlistState` - Playlist status (running/stopped/none)
-
-### **Available Options**
-- `availableEffects` - Complete list: "0: Solid, 1: Blink, 2: Breathe, 9: Rainbow..."
-- `availablePalettes` - Complete list: "0: Default, 1: Random, 2: Rainbow..."
-- `availablePlaylists` - Complete list: "1: Morning, 3: Evening, 5: Party..."
-
-### **Device Information**
-- `firmwareVersion` - WLED firmware version
-- `presetValue` - Current preset number
+The driver provides comprehensive state information for use in dashboards and automations. Key attributes include:
+- `switch`, `level`, `colorName`, `connectionState`
+- `effectName`, `effectId`, `paletteName`, `paletteId`
+- `presetName`, `presetValue`, `playlistName`, `playlistId`, `playlistState`
+- `nightlightActive`, `nightlightDuration`, `nightlightRemaining`
+- `availableEffects`, `availablePalettes`, `availablePresets`, `availablePlaylists`
+- `firmwareVersion`
 
 ---
 
 ## ⚙️ Configuration Options
 
-### **Required Settings**
-- **WLED URI:** Device IP address (e.g., `http://192.168.1.123`)
-- **LED Segment ID:** Target segment (usually `0`)
-
-### **Performance Settings**
-- **Polling Refresh Interval:** Status check frequency (30s to 1hr, or disabled)
-- **Default Transition Time:** Animation duration for changes
-
-### **Advanced Options**
-- **Enable Auto-Retry:** Automatic retry for failed commands
-- **Connection Monitoring:** Health monitoring with auto-recovery
-- **Power Off Main Controller:** Turn off entire WLED device with segment
+- **WLED URI:** Device IP address (e.g., `http://192.168.1.123`).
+- **LED Segment ID:** Target segment (usually `0`).
+- **Polling Refresh Interval:** Status check frequency.
+- **Enable Auto-Retry:** Automatic retry for failed commands.
+- **Connection Monitoring:** Health monitoring with auto-recovery.
+- **Show Deprecated Commands:** Show legacy `ByName` commands in the UI (they remain available for backward compatibility in automations regardless).
 
 ---
 
 ## 🛠️ Installation
 
-### **Method 1: Direct Import (Recommended)**
-1. Navigate to **Drivers Code** in your Hubitat hub
-2. Click **+New Driver** → **Import**
-3. Paste the raw GitHub URL for the driver
-4. Click **Import** → **Save**
+### Method 1: Hubitat Package Manager (HPM) - Recommended
+1.  In HPM, select **Install** > **Search by Keywords**.
+2.  Search for **"WLED Universal"** and select it.
+3.  Follow the on-screen instructions to complete the installation. HPM will handle updates automatically.
 
-### **Method 2: Manual Installation**
-1. Copy the entire driver code
-2. Navigate to **Drivers Code** → **+New Driver**
-3. Paste the code and click **Save**
+### Method 2: Manual Installation
+1.  Navigate to **Drivers Code** in your Hubitat hub.
+2.  Click **+New Driver** > **Import**.
+3.  Paste the driver's raw GitHub URL and click **Import**, then **Save**.
 
-### **Device Setup**
-1. Go to your WLED device in **Devices**
-2. Change **Type** to **WLED Optimized**
-3. Configure the WLED URI and segment ID
-4. Click **Save Device**
-5. Run **forceRefresh** to initialize
+### Device Setup (for new devices)
+1.  Go to **Devices** and select your WLED device.
+2.  In the **Device Information** section, change the **Type** to **WLED Universal**.
+3.  Configure the **WLED URI** (e.g., `http://192.168.1.123`) and any other preferences.
+4.  Click **Save Device**.
+5.  Run the **forceRefresh** command to initialize the driver and fetch data from your WLED device.
 
 ---
 
-## 💡 Usage Examples
+## 🔄 Version History
 
-### **Rule Machine Integration**
-```groovy
-// Morning routine
-device.setPlaylistByName("Morning Lights")
 
-// Party mode with specific effect
-device.setEffectByName("Rainbow", 200, 255, "Party")
+### **v1.3.3**
+**UX Enhancements:**
+- **Unified Commands:** `setEffect`, `setPalette`, `setPreset`, and `setPlaylist` now accept both names (e.g., "Rainbow") and IDs (e.g., 9). Legacy `ByName` commands are now deprecated. All effect/palette/preset/playlist commands now intelligently handle mixed parameter types
+- **Advanced Preset Control:**
+    - `savePreset`: Create or update presets with custom parameters (brightness, effect, colors). Auto-assigns an ID if not provided.
+    - `saveCurrentAsPreset`: Save the current WLED state to a new or existing preset.
+    - `deletePreset`: Delete presets by ID.
+    - `nextPresetInPlaylist`: Advance to the next preset in a running playlist.
+- **Code Refinements:** Consolidated network settings and improved retry logic for better reliability.
 
-// Conditional control
-if (device.currentValue("effectName") == "Solid") {
-    device.setEffectByName("Fire")
-}
+### **v1.3.2**
+**Improvements & Fixes:**
+- **Improved Preset Handling:** Reworked how presets are fetched, parsed, and managed.
+- **API Correction:** Fixed endpoints and data parsing for presets to align with modern WLED firmware.
+- **Data Separation:** Playlists are now correctly separated from the preset list.
 
-// Reverse control for automations
-if (device.currentValue("reverse") == "off") {
-    device.reverseOn()
-}
-```
+### **v1.3.1**
+**Fixed Issues:**
+- The `setNightlight` command now ensures the master power is turned on, providing a more intuitive user experience.
 
-### **WebCoRE Integration**
-```groovy
-// Smart matching - "fire" matches "Fire 2012"
-device.setEffectByName("fire", 255, 255)
+### **v1.3.0**
+**Added Features:**
+- Added complete nightlight implementation with on/off and parameter control.
+- Added nightlight status attributes for monitoring.
 
-// Check connection before commands
-if (device.currentValue("connectionState") == "connected") {
-    device.setPlaylistByName("Evening")
-}
-```
+*(For full history, see driver file)*
+
+---
+
+## 🤝 Credits & Support
+
+- **Original Driver:** Bryan Li (bryan@joyful.house)
+- **Rewrite & Enhancements:** Oliver Beisser
+
+This driver is tested with WLED v0.13+ and is optimized for the Hubitat C-8 platform, while remaining compatible with older hubs.
 
 ---
 
@@ -198,100 +189,39 @@ if (device.currentValue("connectionState") == "connected") {
 - Verify network connectivity between Hubitat and WLED device
 - Use `testConnection()` command to diagnose issues
 - Enable debug logging for detailed error information
+- Check connection state attribute for detailed status:
+  - `connected` - Normal operation
+  - `timeout` - Network timeout issues
+  - `unreachable` - Device not responding
+  - `protocol_error` - WLED API communication issues
 
 ### **Effect/Playlist Not Found**
 - Use `listEffects()`, `listPalettes()`, or `listPlaylists()` to see available options
 - Try partial name matching: "fire" instead of "Fire 2012"
 - Check spelling and capitalization
 - Refresh device with `forceRefresh()` to reload lists
+- Verify WLED firmware version compatibility (v0.13+ recommended)
+
+### **Backward Compatibility**
+- **Legacy Rule Machine Rules**: Existing rules using integer IDs (e.g., `setEffect(15, 0, 100, 0)`) continue to work seamlessly
+- **Mixed Usage**: You can mix IDs and names in the same command: `setEffect(15, 128, 128, "Rainbow")`
+- **String IDs**: Both `setEffect(15, ...)` and `setEffect("15", ...)` are supported
+- **Migration**: No need to update existing automations - they remain fully compatible
+- **Method Signatures**: The driver automatically detects whether you're passing numbers or strings
 
 ### **Performance Issues**
 - Reduce polling frequency if experiencing hub slowdown
-- Enable auto-retry for better reliability
+- Enable auto-retry for better reliability with exponential backoff
 - Check connection state regularly
 - Monitor logs for network errors
+- Consider disabling connection monitoring on stable networks
+- Use batch operations when possible (multiple commands in sequence)
 
----
-
-## 🔄 Version History
-
-### **v1.3.1 (Latest)**
-
-**Fixed Issues:**
-- The `setNightlight` command now ensures the master power is turned on, providing a more intuitive user experience.
-
-### **v1.3.0**
-
-**Added Features:**
-- Added complete nightlight implementation with on/off and parameter control
-- Added nightlight status attributes: `nightlightActive`, `nightlightDuration`, `nightlightMode`, `nightlightTargetBrightness`
-
-### **v1.2.1**
-
-**Added Features:**
-- Added command descriptions for better user interface clarity
-
-**Fixed Issues:**
-- Fixed alarm effects to use actual available WLED effects (Chase Flash, Strobe, Strobe Mega)
-
-### **v1.2**
-
-**Added Features:**
-- Added effect selection by name with smart matching (exact and partial)
-- Added palette selection by name with intelligent fallback
-- Added comprehensive playlist support with name-based control
-- Added reverse effect switch capability for easier automation control
-- Added discovery commands: `listEffects()`, `listPalettes()`, `listPlaylists()`
-- Added device info tracking and firmware version reporting
-- Added support for additional WLED API endpoints (`/json/info`, `/json/playlists`)
-- Added new attributes: `effectId`, `paletteId`, `playlistId`, `playlistName`, `playlistState`, `reverse`
-- Added new commands: `reverseOn()`, `reverseOff()`, `getDeviceInfo()`, `testConnection()`
-
-**Improved Features:**
-- Improved state variables to show effect/palette/playlist IDs alongside names
-- Improved retry logic for failed network requests with exponential backoff
-- Improved error recovery and connection state management with health monitoring
-- Improved segment validation and error handling with detailed logging
-- Improved code organization with constants for better maintainability
-- Improved documentation and modular architecture
-
-**Fixed Issues:**
-- Fixed null pointer exceptions in state synchronization methods
-- Fixed boolean handling in switch and level calculations
-- Fixed @Field constant accessibility issues in Hubitat environment
-- Fixed device info parsing from WLED API response structure
-- Fixed playlist information handling with proper null safety
-
-### **v1.1**
-- Added reverse effect direction control
-- Improved state synchronization
-- Enhanced error handling
-
-### **v1.0**
-- Initial optimized release
-- Asynchronous operations
-- Dashboard compatibility
-- Basic WLED API support
-
----
-
-## 🤝 Credits & Support
-
-* **Original Driver:** Bryan Li (bryan@joyful.house)
-* **Optimization & Refactoring:** Oliver Beisser
-* **Enhanced Features:** Kiro AI Assistant
-
-### **WLED Compatibility**
-- Tested with WLED v0.13+ 
-- Supports all standard WLED features
-- Compatible with ESP8266 and ESP32 devices
-- Works with single and multi-segment configurations
-
-### **Hubitat Compatibility**
-- Optimized for Hubitat C-8 platform
-- Compatible with C-7 and earlier models
-- Full dashboard tile support
-- Rule Machine and WebCoRE integration
+### **Memory and Stability**
+- Avoid excessive polling on devices with many effects/palettes
+- Monitor hub memory usage if using multiple WLED devices
+- Clear device logs periodically to prevent memory buildup
+- Restart driver if experiencing persistent connection issues
 
 ---
 

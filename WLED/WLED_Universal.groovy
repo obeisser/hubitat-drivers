@@ -15,6 +15,13 @@
  *
  * Changelog
  *
+ * v1.3.4 (2025-10-11)
+ * feat: Added tertiary color support for saving presets
+ * fix: Resolved State Variables display issue where complex JSON data was cluttering the device page, moved to private state variables
+ * fix: Added some error handling and validation for data operations
+ * fix: Improved initialization sequence - optimized timing of data loading for better reliability
+ * refactor: Implemented batch attribute updates for improved performance during state synchronization
+ *
  * v1.3.3 (2025-10-05)
  * feat: Unified commands - setEffect, setPalette, setPreset, and setPlaylist now accept either ID numbers or names for improved usability (legacy ByName commands remain available)
  * feat: Added nextPresetInPlaylist command to advance through playlist presets (WLED v0.15+ feature)
@@ -31,36 +38,36 @@
  * fix: Enhanced backward compatibility - existing Rule Machine rules using integer IDs continue to work seamlessly on the combined setEffect, setPalette, setPreset, and setPlaylist methods
  * 
  * v1.3.2 (2025-10-04)
- * - feat: Improve preset management and handeling, including loading, listing, setting by name, and saving presets.
- * - fix: Corrected the API endpoint for fetching presets to `/presets.json` and updated parsing logic.
- * - fix: Corrected preset parsing to use the 'n' key for the preset name.
- * - fix: Ignore preset 0 and separate playlists from presets.
+ * feat: Improve preset management and handeling, including loading, listing, setting by name, and saving presets.
+ * fix: Corrected the API endpoint for fetching presets to `/presets.json` and updated parsing logic.
+ * fix: Corrected preset parsing to use the 'n' key for the preset name.
+ * fix: Ignore preset 0 and separate playlists from presets.
  * 
  * v1.3.1 (2025-10-03)
- * - fix: The setNightlight command now ensures the master power is turned on, providing a more intuitive user experience.
+ * fix: The setNightlight command now ensures the master power is turned on, providing a more intuitive user experience.
  *
  * v1.3.0 (2025-10-01)
- * - feat: Added complete nightlight implementation with on/off and parameter control.
- * - feat: Added nightlight status attributes for active state, duration, mode, and target brightness.
+ * feat: Added complete nightlight implementation with on/off and parameter control.
+ * feat: Added nightlight status attributes for active state, duration, mode, and target brightness.
  *
  * v1.2.1 (2025-09-30)
- * - feat: Added command descriptions for better user interface clarity.
- * - fix: Corrected alarm effects to use actual available WLED effects.
+ * feat: Added command descriptions for better user interface clarity.
+ * fix: Corrected alarm effects to use actual available WLED effects.
  *
  * v1.2.0 (2025-09-29)
- * - feat: Added name-based selection for effects, palettes, and playlists with smart matching.
- * - feat: Added comprehensive playlist and reverse effect switch support.
- * - feat: Added discovery commands (listEffects, listPalettes, listPlaylists) and device info tracking.
- * - refactor: Improved retry logic, error recovery, and connection health monitoring.
- * - refactor: Optimized state synchronization and code organization.
- * - fix: Resolved null pointer exceptions and improved boolean handling.
+ * feat: Added name-based selection for effects, palettes, and playlists with smart matching.
+ * feat: Added comprehensive playlist and reverse effect switch support.
+ * feat: Added discovery commands (listEffects, listPalettes, listPlaylists) and device info tracking.
+ * refactor: Improved retry logic, error recovery, and connection health monitoring.
+ * refactor: Optimized state synchronization and code organization.
+ * fix: Resolved null pointer exceptions and improved boolean handling.
  *
  * v1.1.0
- * - refactor: Improved error handling and retry logic for network operations.
- * - refactor: Enhanced state synchronization and attribute updates.
+ * refactor: Improved error handling and retry logic for network operations.
+ * refactor: Enhanced state synchronization and attribute updates.
  *
  * v1.0.0
- * - Initial release with asynchronous HTTP calls, robust error handling, and extensive WLED API coverage.
+ * Initial release with asynchronous HTTP calls, robust error handling, and extensive WLED API coverage.
  */
 
 import groovy.json.JsonOutput
@@ -165,7 +172,8 @@ metadata {
             [name:"speed", type: "NUMBER", description: "Effect speed (0-255) - optional"],
             [name:"intensity", type: "NUMBER", description: "Effect intensity (0-255) - optional"],
             [name:"primaryColor", type: "STRING", description: "Primary color as hex (e.g., 'FF0000') - optional"],
-            [name:"secondaryColor", type: "STRING", description: "Secondary color as hex (e.g., '00FF00') - optional"]
+            [name:"secondaryColor", type: "STRING", description: "Secondary color as hex (e.g., '00FF00') - optional"],
+            [name:"tertiaryColor", type: "STRING", description: "Tertiary color as hex (e.g., '0000FF') - optional"]
         ]
         command "saveCurrentAsPreset", [
             [name:"presetName", type: "STRING", description: "Name for the preset"],
@@ -262,9 +270,27 @@ def initialize() {
 private initializeState() {
     state.connectionState = "unknown"
     state.lastSuccessfulContact = now()
-    state.presets = [:]
-    state.playlists = [:]
+    // Clear complex data that shouldn't be in state variables
+    clearStoredData()
     updateAttr("connectionState", "initializing")
+}
+
+private clearStoredData() {
+    // Remove visible state variables that show up in State Variables section
+    def visibleKeysToRemove = ["presets", "playlists", "segments", "effects", "palettes", "presetsData", "playlistsData", "segmentsData"]
+    visibleKeysToRemove.each { key ->
+        if (state.containsKey(key)) {
+            state.remove(key)
+            if (logEnable) log.debug "Cleaned up visible state variable: ${key}"
+        }
+    }
+    
+    // Use private state variables (prefixed with underscore) that don't show in UI
+    if (!state._presets) state._presets = [:]
+    if (!state._playlists) state._playlists = [:]
+    if (!state._segments) state._segments = []
+    if (!state._effects) state._effects = []
+    if (!state._palettes) state._palettes = []
 }
 
 private updateCommandVisibility() {
@@ -332,22 +358,38 @@ def parse(hubitat.scheduling.AsyncResponse response, Map data = null) {
 
 private handleFullResponse(Map msg) {
     boolean wasInitialized = state.initialized
-    state.effects = msg.effects
-    state.palettes = msg.palettes
-    state.segments = msg.state.seg ?: []
+    state._effects = msg.effects
+    state._palettes = msg.palettes
+    
+    // Store only essential segment info to keep State Variables clean
+    if (msg.state.seg) {
+        state._segments = msg.state.seg.collect { segment ->
+            [
+                id: segment.id,
+                start: segment.start,
+                stop: segment.stop,
+                on: segment.on ?: false,
+                bri: segment.bri ?: 255,
+                col: segment.col ?: [[255,255,255]]
+            ]
+        }
+    } else {
+        state._segments = []
+    }
+    
     synchronizeState(msg.state)
     
     if (!wasInitialized) {
         log.info "Full device info received. Driver initialization complete."
-        log.info "Loaded ${state.effects.size()} effects and ${state.palettes.size()} palettes"
+        log.info "Loaded ${getEffectsData().size()} effects and ${getPalettesData().size()} palettes"
         setSchedule()
         state.initialized = true
         runIn(2, getDeviceInfo)
-        runIn(4, getPresets)
-        runIn(5, listEffects)
-        runIn(6, listPalettes)
-        runIn(7, listPresets)
-        runIn(8, listPlaylists)
+        runIn(4, getPresets)  // Presets endpoint includes both presets and playlists
+        runIn(6, listEffects)
+        runIn(7, listPalettes)
+        runIn(8, listPresets)
+        runIn(9, listPlaylists)
     }
 }
 
@@ -456,26 +498,26 @@ def setPalette(paletteIdOrName) {
 }
 
 def listEffects() {
-    if (!state.effects) {
+    if (!getEffectsData()) {
         log.warn "Effects list not available. Refreshing device..."
         forceRefresh()
         return
     }
     
     def effectsList = getEffectsList()
-    log.info "Available Effects (${state.effects.size()}): ${effectsList}"
+    log.info "Available Effects (${getEffectsData().size()}): ${effectsList}"
     updateAttr("availableEffects", effectsList)
 }
 
 def listPalettes() {
-    if (!state.palettes) {
+    if (!getPalettesData()) {
         log.warn "Palettes list not available. Refreshing device..."
         forceRefresh()
         return
     }
     
     def palettesList = getPalettesList()
-    log.info "Available Palettes (${state.palettes.size()}): ${palettesList}"
+    log.info "Available Palettes (${getPalettesData().size()}): ${palettesList}"
     updateAttr("availablePalettes", palettesList)
 }
 
@@ -488,12 +530,13 @@ def setPreset(presetIdOrName) {
     sendWledCommand([ps: presetId])
 }
 
-def savePreset(String presetName, Number presetId = null, Number brightness = null, String effect = null, String palette = null, Number speed = null, Number intensity = null, String primaryColor = null, String secondaryColor = null) {
+def savePreset(String presetName, Number presetId = null, Number brightness = null, String effect = null, String palette = null, Number speed = null, Number intensity = null, String primaryColor = null, String secondaryColor = null, String tertiaryColor = null) {
     // Examples:
     // savePreset("Bright Rainbow", null, 255, "Rainbow", "Default", 150, 128)  // Auto-assign next available ID
-    // savePreset("Red Alert", 11, 200, "Strobe", null, 255, 255, "FF0000", "000000")  // Update/create preset 11
+    // savePreset("Red Alert", 11, 200, "Strobe", null, 255, 255, "FF0000", "000000", "0000FF")  // Update/create preset 11 with tertiary color
     // savePreset("Sunset")  // Simple preset with auto-assigned ID, current device settings
     // savePreset("Blue Mood", null, 100, null, null, null, null, "0000FF")  // Auto-assign with blue color
+    // savePreset("RGB Preset", null, 200, "Solid", null, null, null, "FF0000", "00FF00", "0000FF")  // Red, Green, Blue colors
     
     if (!presetName || presetName.trim().isEmpty()) {
         log.error "Preset name cannot be empty."
@@ -515,8 +558,8 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
             return
         }
         // Check if we're updating an existing preset
-        if (state.presets && state.presets[targetPresetId.toString()]) {
-            def existingName = state.presets[targetPresetId.toString()].n
+        if (getPresetsData() && getPresetsData()[targetPresetId.toString()]) {
+            def existingName = getPresetsData()[targetPresetId.toString()].n
             if (logEnable) log.debug "Updating existing preset ${targetPresetId} (was: '${existingName}', now: '${presetName}')"
         }
     }
@@ -592,10 +635,8 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
         // Ensure we have primary color slot filled
         if (segmentColors.size() == 0) {
             // Use current segment's primary color as default, fallback to white
-            // NOTE: Explicit null checking used instead of chained safe navigation (currentSegment?.col?[0])
-            // because Hubitat's Groovy parser has issues with complex safe navigation + array access syntax
             def defaultPrimary = [255, 255, 255] // Default to white
-            def currentSegment = state.segments?.find { it.id == segmentId }
+            def currentSegment = getSegmentsData()?.find { it.id == segmentId }
             if (currentSegment && currentSegment.col && currentSegment.col.size() > 0) {
                 defaultPrimary = currentSegment.col[0]
             }
@@ -605,9 +646,29 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
         segmentColors.add(rgb)
     }
     
+    if (tertiaryColor != null) {
+        def rgb = parseHexColor(tertiaryColor)
+        if (rgb == null) {
+            log.error "Invalid tertiary color format: ${tertiaryColor}. Use hex format like '0000FF'."
+            return
+        }
+        // Ensure we have primary and secondary color slots filled
+        def currentSegment = getSegmentsData()?.find { it.id == segmentId }
+        def defaultColors = [[255, 255, 255], [0, 0, 0]] // Default primary (white) and secondary (black)
+        if (currentSegment && currentSegment.col) {
+            if (currentSegment.col.size() > 0) defaultColors[0] = currentSegment.col[0]
+            if (currentSegment.col.size() > 1) defaultColors[1] = currentSegment.col[1]
+        }
+        
+        while (segmentColors.size() < 2) {
+            def colorIndex = segmentColors.size()
+            segmentColors.add(defaultColors[colorIndex])
+            if (logEnable) log.debug "Using current segment color ${colorIndex} as default: ${defaultColors[colorIndex]}"
+        }
+        segmentColors.add(rgb)
+    }
+    
     // Build segment configuration map all at once
-    // NOTE: Using conditional assignment instead of dynamic property addition to avoid
-    // Hubitat Groovy parser issues with maps initialized using literal syntax
     def segmentConfig = [id: segmentId]
     if (segmentBrightness != null) segmentConfig.bri = segmentBrightness
     if (segmentEffectId != null) segmentConfig.fx = segmentEffectId
@@ -653,8 +714,8 @@ def saveCurrentAsPreset(String presetName, Number presetId = null) {
             return
         }
         // Check if we're updating an existing preset
-        if (state.presets && state.presets[targetPresetId.toString()]) {
-            def existingName = state.presets[targetPresetId.toString()].n
+        if (getPresetsData() && getPresetsData()[targetPresetId.toString()]) {
+            def existingName = getPresetsData()[targetPresetId.toString()].n
             if (logEnable) log.debug "Updating existing preset ${targetPresetId} (was: '${existingName}', now: '${presetName}')"
         }
     }
@@ -682,21 +743,28 @@ def deletePreset(Number presetId) {
 }
 
 def listPresets() {
-    if (!state.presets) {
-        log.warn "Presets not available. Refreshing device..."
-        getPresets()
-        return
+    try {
+        if (!getPresetsData() || getPresetsData().size() == 0) {
+            log.warn "Presets not available. Refreshing device..."
+            getPresets()
+            return
+        }
+        
+        def presetsList = getPresetsList()
+        log.info "Available Presets (${getPresetsData().size()}): ${presetsList}"
+        updateAttr("availablePresets", presetsList)
+    } catch (Exception e) {
+        log.error "Error listing presets: ${e.message}"
+        updateAttr("availablePresets", "Error loading presets")
     }
-    
-    def presetsList = getPresetsList()
-    log.info "Available Presets (${state.presets.size()}): ${presetsList}"
-    updateAttr("availablePresets", presetsList)
 }
 
 def getPresets() {
     if (logEnable) log.debug "Requesting presets information..."
     sendEthernetGet(WLED_ENDPOINTS.PRESETS)
 }
+
+
 
 def setPlaylist(playlistIdOrName) {
     // Resolve playlist parameter
@@ -725,15 +793,20 @@ def nextPresetInPlaylist() {
 }
 
 def listPlaylists() {
-    if (!state.playlists) {
-        log.warn "Playlists not available. Refreshing device..."
-        getPresets() // Playlists are included in presets
-        return
+    try {
+        if (!getPlaylistsData() || getPlaylistsData().size() == 0) {
+            log.warn "Playlists not available. Refreshing device..."
+            getPresets() // Playlists are included in presets endpoint
+            return
+        }
+        
+        def playlistsList = getPlaylistsList()
+        log.info "Available Playlists (${getPlaylistsData().size()}): ${playlistsList}"
+        updateAttr("availablePlaylists", playlistsList)
+    } catch (Exception e) {
+        log.error "Error listing playlists: ${e.message}"
+        updateAttr("availablePlaylists", "Error loading playlists")
     }
-    
-    def playlistsList = getPlaylistsList()
-    log.info "Available Playlists (${state.playlists.size()}): ${playlistsList}"
-    updateAttr("availablePlaylists", playlistsList)
 }
 
 //--- NIGHTLIGHT COMMANDS ---//
@@ -880,11 +953,11 @@ private updateEffectInformation(seg) {
         effectAttrs.effectId = effectId
         effectAttrs.paletteId = paletteId
         
-        if (state.effects) { 
-            effectAttrs.effectName = state.effects[effectId] ?: "Unknown"
+        if (getEffectsData()) { 
+            effectAttrs.effectName = getEffectsData()[effectId] ?: "Unknown"
         }
-        if (state.palettes) { 
-            effectAttrs.paletteName = state.palettes[paletteId] ?: "Unknown"
+        if (getPalettesData()) { 
+            effectAttrs.paletteName = getPalettesData()[paletteId] ?: "Unknown"
         }
         
         def isReverse = seg?.rev ?: false
@@ -892,13 +965,13 @@ private updateEffectInformation(seg) {
         effectAttrs.reverse = isReverse ? "on" : "off"
         
         // Update available lists when effects/palettes are loaded (only if not already set)
-        if (state.effects && !device.currentValue("availableEffects")) {
+        if (getEffectsData() && !device.currentValue("availableEffects")) {
             effectAttrs.availableEffects = getEffectsList()
         }
-        if (state.palettes && !device.currentValue("availablePalettes")) {
+        if (getPalettesData() && !device.currentValue("availablePalettes")) {
             effectAttrs.availablePalettes = getPalettesList()
         }
-        if (state.playlists && !device.currentValue("availablePlaylists")) {
+        if (getPlaylistsData() && !device.currentValue("availablePlaylists")) {
             effectAttrs.availablePlaylists = getPlaylistsList()
         }
         
@@ -956,6 +1029,39 @@ private handleDeviceInfo(deviceInfo) {
     
     log.info "WLED Device Info - Version: ${deviceInfo.ver}, Build: ${deviceInfo.vid}, Name: ${deviceInfo.name}"
 }
+
+private handlePresetsInfo(presetsData) {
+    try {
+        if (logEnable) log.debug "Processing presets info: ${presetsData}"
+        
+        if (presetsData) {
+            def newPresets = [:]
+            def newPlaylists = [:]
+
+            presetsData.each { id, preset ->
+                if (id != "0") {
+                    def presetName = preset.n ?: "Unnamed"
+                    if (preset.containsKey("playlist")) {
+                        newPlaylists[id] = presetName
+                    } else {
+                        newPresets[id] = presetName
+                    }
+                }
+            }
+            
+            state._presets = newPresets
+            state._playlists = newPlaylists
+            
+            if (logEnable) log.debug "Loaded ${getPresetsData().size()} presets and ${getPlaylistsData().size()} playlists."
+            updateAttr("availablePresets", getPresetsList())
+            updateAttr("availablePlaylists", getPlaylistsList())
+        }
+    } catch (e) {
+        log.error "Error handling presets info: ${e.message}"
+    }
+}
+
+
 
 //--- HTTP COMMUNICATIONS ---//
 private sendWledCommand(Map payload, Number transitionRate = null, Map retryData = null) {
@@ -1078,6 +1184,82 @@ def checkConnection() {
 
 //--- HELPER METHODS ---//
 
+// Helper methods to access private state variables (prevents them from showing in State Variables UI)
+private getEffectsData() { 
+    try {
+        def data = state._effects
+        if (!data || !(data instanceof List)) {
+            state._effects = []
+            return []
+        }
+        return data
+    } catch (Exception e) {
+        log.error "Error accessing effects data: ${e.message}"
+        state._effects = []
+        return []
+    }
+}
+
+private getPalettesData() { 
+    try {
+        def data = state._palettes
+        if (!data || !(data instanceof List)) {
+            state._palettes = []
+            return []
+        }
+        return data
+    } catch (Exception e) {
+        log.error "Error accessing palettes data: ${e.message}"
+        state._palettes = []
+        return []
+    }
+}
+
+private getPresetsData() { 
+    try {
+        def data = state._presets
+        if (!data || !(data instanceof Map)) {
+            state._presets = [:]
+            return [:]
+        }
+        return data
+    } catch (Exception e) {
+        log.error "Error accessing presets data: ${e.message}"
+        state._presets = [:]
+        return [:]
+    }
+}
+
+private getPlaylistsData() { 
+    try {
+        def data = state._playlists
+        if (!data || !(data instanceof Map)) {
+            state._playlists = [:]
+            return [:]
+        }
+        return data
+    } catch (Exception e) {
+        log.error "Error accessing playlists data: ${e.message}"
+        state._playlists = [:]
+        return [:]
+    }
+}
+
+private getSegmentsData() { 
+    try {
+        def data = state._segments
+        if (!data || !(data instanceof List)) {
+            state._segments = []
+            return []
+        }
+        return data
+    } catch (Exception e) {
+        log.error "Error accessing segments data: ${e.message}"
+        state._segments = []
+        return []
+    }
+}
+
 /**
  * Get the current LED segment ID with safe handling of null/invalid values
  * @return Integer segment ID, defaults to 0 if invalid
@@ -1101,6 +1283,8 @@ private Integer getCurrentSegmentId() {
  */
 private Integer resolveParameter(paramValue, String paramType, String paramName, boolean isOptional = false) {
     if (paramValue == null) {
+        if (isOptional) return null
+        log.error "${paramName.capitalize()} cannot be null."
         return null
     }
     
@@ -1243,17 +1427,29 @@ private batchUpdateAttributes(Map attributes, String unit = "") {
 }
 
 private validateSegment(int segmentId) {
-    if (!state.segments) {
-        log.warn "Segment information not available. Proceeding with command."
-        return true // Allow command to proceed, WLED will handle invalid segments
+    try {
+        if (!getSegmentsData() || getSegmentsData().size() == 0) {
+            log.warn "Segment information not available. Proceeding with command."
+            return true // Allow command to proceed, WLED will handle invalid segments
+        }
+        
+        def segment = getSegmentsData().find { it?.id == segmentId }
+        if (!segment) {
+            def availableSegments = getSegmentsData().findAll { it?.id != null }.collect { it.id }
+            log.warn "Segment ${segmentId} not found on device. Available segments: ${availableSegments}"
+            return false
+        }
+        
+        // Additional validation - check if segment is active (start != stop)
+        if (segment.start == segment.stop) {
+            log.warn "Segment ${segmentId} is inactive (start == stop). Command may not have visible effect."
+        }
+        
+        return true
+    } catch (Exception e) {
+        log.error "Error validating segment ${segmentId}: ${e.message}"
+        return true // Allow command to proceed on validation error
     }
-    
-    def segment = state.segments.find { it.id == segmentId }
-    if (!segment) {
-        log.warn "Segment ${segmentId} not found on device. Available segments: ${state.segments.collect{it.id}}"
-        return false
-    }
-    return true
 }
 
 private setSchedule() {
@@ -1533,16 +1729,16 @@ private Integer resolvePlaylistId(String playlist) {
 
 //--- EFFECT AND PALETTE HELPER METHODS ---//
 private Integer findEffectIdByName(String effectName) {
-    if (!state.effects) return null
+    if (!getEffectsData()) return null
     
     // Try exact match first
-    def exactMatch = state.effects.findIndexOf { it.toLowerCase() == effectName.toLowerCase() }
+    def exactMatch = getEffectsData().findIndexOf { it.toLowerCase() == effectName.toLowerCase() }
     if (exactMatch >= 0) return exactMatch
     
     // Try partial match
-    def partialMatch = state.effects.findIndexOf { it.toLowerCase().contains(effectName.toLowerCase()) }
+    def partialMatch = getEffectsData().findIndexOf { it.toLowerCase().contains(effectName.toLowerCase()) }
     if (partialMatch >= 0) {
-        if (logEnable) log.debug "Found partial match for '${effectName}': '${state.effects[partialMatch]}' (ID: ${partialMatch})"
+        if (logEnable) log.debug "Found partial match for '${effectName}': '${getEffectsData()[partialMatch]}' (ID: ${partialMatch})"
         return partialMatch
     }
     
@@ -1550,16 +1746,16 @@ private Integer findEffectIdByName(String effectName) {
 }
 
 private Integer findPaletteIdByName(String paletteName) {
-    if (!state.palettes) return null
+    if (!getPalettesData()) return null
     
     // Try exact match first
-    def exactMatch = state.palettes.findIndexOf { it.toLowerCase() == paletteName.toLowerCase() }
+    def exactMatch = getPalettesData().findIndexOf { it.toLowerCase() == paletteName.toLowerCase() }
     if (exactMatch >= 0) return exactMatch
     
     // Try partial match
-    def partialMatch = state.palettes.findIndexOf { it.toLowerCase().contains(paletteName.toLowerCase()) }
+    def partialMatch = getPalettesData().findIndexOf { it.toLowerCase().contains(paletteName.toLowerCase()) }
     if (partialMatch >= 0) {
-        if (logEnable) log.debug "Found partial match for '${paletteName}': '${state.palettes[partialMatch]}' (ID: ${partialMatch})"
+        if (logEnable) log.debug "Found partial match for '${paletteName}': '${getPalettesData()[partialMatch]}' (ID: ${partialMatch})"
         return partialMatch
     }
     
@@ -1568,10 +1764,10 @@ private Integer findPaletteIdByName(String paletteName) {
 
 private String getEffectsList() {
     try {
-        if (!state.effects) return "Effects not loaded"
+        if (!getEffectsData()) return "Effects not loaded"
         
         def effectsWithIds = []
-        state.effects.eachWithIndex { effect, index ->
+        getEffectsData().eachWithIndex { effect, index ->
             effectsWithIds.add("${index}: ${effect ?: 'Unknown'}")
         }
         return effectsWithIds.join(", ")
@@ -1583,10 +1779,10 @@ private String getEffectsList() {
 
 private String getPalettesList() {
     try {
-        if (!state.palettes) return "Palettes not loaded"
+        if (!getPalettesData()) return "Palettes not loaded"
         
         def palettesWithIds = []
-        state.palettes.eachWithIndex { palette, index ->
+        getPalettesData().eachWithIndex { palette, index ->
             palettesWithIds.add("${index}: ${palette ?: 'Unknown'}")
         }
         return palettesWithIds.join(", ")
@@ -1596,16 +1792,49 @@ private String getPalettesList() {
     }
 }
 
-//--- PRESET HELPER METHODS ---//
+//--- PRESET AND PLAYLIST HELPER METHODS ---//
 private Integer findPresetIdByName(String presetName) {
-    if (!state.presets) return null
+    if (!getPresetsData()) return null
     
-    def preset = state.presets.find { id, p -> id != "0" && p.n?.toLowerCase() == presetName.toLowerCase() }
+    // Handle both simple strings and complex objects with .n property
+    def preset = getPresetsData().find { id, presetData ->
+        def name = presetData instanceof String ? presetData : presetData?.n
+        return name?.toLowerCase() == presetName.toLowerCase()
+    }
     if (preset) return preset.key.toInteger()
     
-    def partialMatch = state.presets.find { id, p -> id != "0" && p.n?.toLowerCase()?.contains(presetName.toLowerCase()) }
+    // Try partial match
+    def partialMatch = getPresetsData().find { id, presetData ->
+        def name = presetData instanceof String ? presetData : presetData?.n
+        return name?.toLowerCase()?.contains(presetName.toLowerCase())
+    }
     if (partialMatch) {
-        if (logEnable) log.debug "Found partial match for '${presetName}': '${partialMatch.value.n}' (ID: ${partialMatch.key})"
+        def matchName = partialMatch.value instanceof String ? partialMatch.value : partialMatch.value?.n
+        if (logEnable) log.debug "Found partial match for '${presetName}': '${matchName}' (ID: ${partialMatch.key})"
+        return partialMatch.key.toInteger()
+    }
+    
+    return null
+}
+
+private Integer findPlaylistIdByName(String playlistName) {
+    if (!getPlaylistsData()) return null
+    
+    // Handle both simple strings and complex objects with .n property
+    def playlist = getPlaylistsData().find { id, playlistData ->
+        def name = playlistData instanceof String ? playlistData : playlistData?.n
+        return name?.toLowerCase() == playlistName.toLowerCase()
+    }
+    if (playlist) return playlist.key.toInteger()
+    
+    // Try partial match
+    def partialMatch = getPlaylistsData().find { id, playlistData ->
+        def name = playlistData instanceof String ? playlistData : playlistData?.n
+        return name?.toLowerCase()?.contains(playlistName.toLowerCase())
+    }
+    if (partialMatch) {
+        def matchName = partialMatch.value instanceof String ? partialMatch.value : partialMatch.value?.n
+        if (logEnable) log.debug "Found partial match for '${playlistName}': '${matchName}' (ID: ${partialMatch.key})"
         return partialMatch.key.toInteger()
     }
     
@@ -1614,14 +1843,11 @@ private Integer findPresetIdByName(String presetName) {
 
 private String getPresetsList() {
     try {
-        if (!state.presets) return "Presets not loaded"
+        if (!getPresetsData()) return "Presets not loaded"
         
         def presetsWithIds = []
-        state.presets.each { id, preset ->
-            if (id != "0") {
-                def name = preset?.n ?: "Unnamed Preset"
-                presetsWithIds.add("${id}: ${name}")
-            }
+        getPresetsData().sort { a, b -> a.key.toInteger() <=> b.key.toInteger() }.each { id, name ->
+            presetsWithIds.add("${id}: ${name ?: 'Unnamed Preset'}")
         }
         return presetsWithIds.join(", ")
     } catch (Exception e) {
@@ -1630,16 +1856,30 @@ private String getPresetsList() {
     }
 }
 
+private String getPlaylistsList() {
+    try {
+        if (!getPlaylistsData()) return "Playlists not loaded"
+        
+        def playlistsWithIds = []
+        getPlaylistsData().sort { a, b -> a.key.toInteger() <=> b.key.toInteger() }.each { id, name ->
+            playlistsWithIds.add("${id}: ${name ?: 'Unnamed Playlist'}")
+        }
+        return playlistsWithIds.join(", ")
+    } catch (Exception e) {
+        log.error "Error getting playlists list: ${e.message}"
+        return "Error loading playlists"
+    }
+}
+
 private Integer findNextAvailablePresetId() {
     try {
-        // If no presets loaded yet, start with ID 1
-        if (!state.presets) {
+        if (!getPresetsData()) {
             return 1
         }
         
         // Find the first available slot from 1 to 250
         for (int i = 1; i <= 250; i++) {
-            if (!state.presets.containsKey(i.toString())) {
+            if (!getPresetsData().containsKey(i.toString())) {
                 return i
             }
         }
@@ -1660,8 +1900,9 @@ private updatePresetInformation(wledState) {
         if (currentPresetId && currentPresetId > 0) {
             presetAttrs.presetValue = currentPresetId
             
-            if (state.presets && state.presets[currentPresetId.toString()]) {
-                def presetName = state.presets[currentPresetId.toString()].n ?: "Unnamed Preset"
+            if (getPresetsData() && getPresetsData()[currentPresetId.toString()]) {
+                def presetData = getPresetsData()[currentPresetId.toString()]
+                def presetName = presetData instanceof String ? presetData : presetData?.n ?: "Unnamed Preset"
                 presetAttrs.presetName = presetName
             } else {
                 presetAttrs.presetName = "Unknown Preset"
@@ -1683,81 +1924,8 @@ private updatePresetInformation(wledState) {
     }
 }
 
-private handlePresetsInfo(presetsData) {
-    try {
-        if (logEnable) log.debug "Processing presets info: ${presetsData}"
-        
-        if (presetsData) {
-            def newPresets = [:]
-            def newPlaylists = [:]
-            presetsData.each { id, preset ->
-                if (id == "0") return
-
-                if (preset.containsKey("playlist")) {
-                    newPlaylists[id] = preset
-                } else {
-                    newPresets[id] = preset
-                }
-            }
-
-            state.presets = newPresets
-            state.playlists = newPlaylists
-
-            log.info "Loaded ${state.presets.size()} presets and ${state.playlists.size()} playlists"
-            updateAttr("availablePresets", getPresetsList())
-            updateAttr("availablePlaylists", getPlaylistsList())
-        } else {
-            state.presets = [:]
-            state.playlists = [:]
-            updateAttr("availablePresets", "No presets available")
-            updateAttr("availablePlaylists", "No playlists available")
-            log.info "No presets or playlists found on device"
-        }
-    } catch (Exception e) {
-        log.warn "Error processing presets info: ${e.message}"
-        state.presets = [:]
-        state.playlists = [:]
-        updateAttr("availablePresets", "Error loading presets")
-        updateAttr("availablePlaylists", "Error loading playlists")
-    }
-}
-
-//--- PLAYLIST HELPER METHODS ---//
-private Integer findPlaylistIdByName(String playlistName) {
-    if (!state.playlists) return null
-    
-    def playlist = state.playlists.find { id, p -> p.n?.toLowerCase() == playlistName.toLowerCase() }
-    if (playlist) return playlist.key.toInteger()
-    
-    def partialMatch = state.playlists.find { id, p -> p.n?.toLowerCase()?.contains(playlistName.toLowerCase()) }
-    if (partialMatch) {
-        if (logEnable) log.debug "Found partial match for '${playlistName}': '${partialMatch.value.n}' (ID: ${partialMatch.key})"
-        return partialMatch.key.toInteger()
-    }
-    
-    return null
-}
-
-private String getPlaylistsList() {
-    try {
-        if (!state.playlists) return "Playlists not loaded"
-        
-        def playlistsWithIds = []
-        state.playlists.each { id, playlist ->
-            def name = playlist?.n ?: "Unnamed Playlist"
-            playlistsWithIds.add("${id}: ${name}")
-        }
-        return playlistsWithIds.join(", ")
-    } catch (Exception e) {
-        log.error "Error getting playlists list: ${e.message}"
-        return "Error loading playlists"
-    }
-}
-
 private updatePlaylistInformation(wledState) {
     try {
-        // Check if a playlist is currently running
-        // Note: WLED API uses 'pl' for current playlist ID in state response
         def currentPlaylistId = wledState?.pl
         def playlistAttrs = [:]
         
@@ -1765,11 +1933,13 @@ private updatePlaylistInformation(wledState) {
             playlistAttrs.playlistId = currentPlaylistId
             playlistAttrs.playlistState = "running"
             
-            if (state.playlists && state.playlists[currentPlaylistId.toString()]) {
-                def playlistName = state.playlists[currentPlaylistId.toString()].n ?: "Unnamed Playlist"
+            if (getPlaylistsData() && getPlaylistsData()[currentPlaylistId.toString()]) {
+                def playlistData = getPlaylistsData()[currentPlaylistId.toString()]
+                def playlistName = playlistData instanceof String ? playlistData : playlistData?.n ?: "Unnamed Playlist"
                 playlistAttrs.playlistName = playlistName
             } else {
-                playlistAttrs.playlistName = "Unknown Playlist"
+                // If not in our list, it might be a preset-based playlist without a name
+                playlistAttrs.playlistName = "Unknown Playlist ${currentPlaylistId}"
             }
         } else {
             playlistAttrs.playlistId = 0
@@ -1780,12 +1950,7 @@ private updatePlaylistInformation(wledState) {
         batchUpdateAttributes(playlistAttrs)
     } catch (Exception e) {
         if (logEnable) log.debug "Error updating playlist information: ${e.message}"
-        // Fallback to safe defaults
-        def fallbackAttrs = [
-            playlistId: 0,
-            playlistState: "none", 
-            playlistName: "None"
-        ]
+        def fallbackAttrs = [playlistId: 0, playlistState: "none", playlistName: "None"]
         batchUpdateAttributes(fallbackAttrs)
     }
 }

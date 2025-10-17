@@ -15,6 +15,11 @@
  *
  * Changelog
  *
+ * v1.3.5 (2025-10-17)
+ * feat: Set commands (setEffect, setPalette, setPreset, setPlaylist) now automatically turn on device for more intuitive behavior
+ * fix: Fixed playlist activation - playlists now properly turn on device and can be stopped with off() command
+ * fix: Corrected preset data type handling
+ *
  * v1.3.4 (2025-10-11)
  * feat: Added tertiary color support for saving presets
  * fix: Resolved State Variables display issue where complex JSON data was cluttering the device page, moved to private state variables
@@ -398,6 +403,14 @@ def on() { sendWledCommand([on:true, seg: [[id: getCurrentSegmentId(), on:true]]
 def off() {
     def payload = [seg: [[id: getCurrentSegmentId(), on:false]]]
     if (powerOffParent) { payload.on = false }
+    
+    // Stop any running playlist when turning off
+    def currentPlaylistState = device.currentValue("playlistState")
+    if (currentPlaylistState == "running") {
+        payload.playlist = [on: false]
+        if (logEnable) log.debug "Stopping playlist when turning off device"
+    }
+    
     sendWledCommand(payload)
 }
 
@@ -493,7 +506,7 @@ def setPalette(paletteIdOrName) {
     if (paletteId == null) return
     
     if (logEnable) log.debug "Setting palette (ID: ${paletteId})"
-    def payload = [seg: [[id: getCurrentSegmentId(), pal: paletteId]]]
+    def payload = [on: true, seg: [[id: getCurrentSegmentId(), on: true, pal: paletteId]]]
     sendWledCommand(payload)
 }
 
@@ -527,7 +540,7 @@ def setPreset(presetIdOrName) {
     if (presetId == null) return
     
     if (logEnable) log.debug "Activating preset (ID: ${presetId})"
-    sendWledCommand([ps: presetId])
+    sendWledCommand([on: true, ps: presetId])
 }
 
 def savePreset(String presetName, Number presetId = null, Number brightness = null, String effect = null, String palette = null, Number speed = null, Number intensity = null, String primaryColor = null, String secondaryColor = null, String tertiaryColor = null) {
@@ -559,7 +572,8 @@ def savePreset(String presetName, Number presetId = null, Number brightness = nu
         }
         // Check if we're updating an existing preset
         if (getPresetsData() && getPresetsData()[targetPresetId.toString()]) {
-            def existingName = getPresetsData()[targetPresetId.toString()].n
+            def presetData = getPresetsData()[targetPresetId.toString()]
+            def existingName = presetData instanceof String ? presetData : presetData?.n ?: "Unnamed Preset"
             if (logEnable) log.debug "Updating existing preset ${targetPresetId} (was: '${existingName}', now: '${presetName}')"
         }
     }
@@ -715,7 +729,8 @@ def saveCurrentAsPreset(String presetName, Number presetId = null) {
         }
         // Check if we're updating an existing preset
         if (getPresetsData() && getPresetsData()[targetPresetId.toString()]) {
-            def existingName = getPresetsData()[targetPresetId.toString()].n
+            def presetData = getPresetsData()[targetPresetId.toString()]
+            def existingName = presetData instanceof String ? presetData : presetData?.n ?: "Unnamed Preset"
             if (logEnable) log.debug "Updating existing preset ${targetPresetId} (was: '${existingName}', now: '${presetName}')"
         }
     }
@@ -772,12 +787,15 @@ def setPlaylist(playlistIdOrName) {
     if (playlistId == null) return
     
     if (logEnable) log.debug "Starting playlist (ID: ${playlistId})"
-    sendWledCommand([playlist: [ps: playlistId, on: true]])
+    // Playlists are actually presets that contain playlist definitions
+    // So we activate them like presets, not with playlist commands
+    sendWledCommand([on: true, ps: playlistId])
 }
 
 def stopPlaylist() {
     if (logEnable) log.debug "Stopping current playlist"
-    sendWledCommand([playlist: [on: false]])
+    // Try multiple approaches to stop playlist
+    sendWledCommand([ps: -1, playlist: [on: false]])
 }
 
 def nextPresetInPlaylist() {

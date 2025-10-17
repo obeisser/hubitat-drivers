@@ -143,6 +143,18 @@ The driver provides comprehensive state information for use in dashboards and au
 
 ## 🔄 Version History
 
+### **v1.3.5**
+**Bug Fixes & Enhancements:**
+- **Intuitive Set Commands:** Set commands (setEffect, setPalette, setPreset, setPlaylist) now automatically turn on device
+- **Fixed Playlist Control:** Playlists now properly turn on device and can be stopped with off() command
+- **Enhanced Preset Management:** Fixed data type handling errors and added tertiary color support
+
+### **v1.3.4**
+**Performance & Stability:**
+- **Tertiary Color Support:** Added tertiary color support for saving presets with complete RGB control
+- **State Variables Cleanup:** Resolved display issues where complex JSON data cluttered the device page
+- **Improved Initialization:** Optimized timing and reliability of data loading during startup
+- **Performance Enhancements:** Implemented batch attribute updates for better synchronization
 
 ### **v1.3.3**
 **UX Enhancements:**

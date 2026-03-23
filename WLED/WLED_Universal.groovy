@@ -1558,7 +1558,8 @@ private List<Integer> hsvToRgb(float hue, float saturation, float value) {
     float t = value * (1 - (1 - f) * saturation)
     
     switch (h) {
-        case 0: return [(int)(value * 255), (int)(t * 255), (int)(p * 255)]
+        case 0:
+        case 6: return [(int)(value * 255), (int)(t * 255), (int)(p * 255)]
         case 1: return [(int)(q * 255), (int)(value * 255), (int)(p * 255)]
         case 2: return [(int)(p * 255), (int)(value * 255), (int)(t * 255)]
         case 3: return [(int)(p * 255), (int)(q * 255), (int)(value * 255)]

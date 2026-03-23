@@ -441,6 +441,7 @@ def setHue(value) {
     def payload = [on: true, seg: [[id: segmentId, on: true, col: [rgb], fx: 0]]]
     sendWledCommand(payload)
     updateAttr("hue", value)
+    updateAttr("colorMode", "RGB")
     setGenericNameFromHue(value)
 }
 
@@ -450,6 +451,7 @@ def setSaturation(value) {
     def payload = [on: true, seg: [[id: segmentId, on: true, col: [rgb], fx: 0]]]
     sendWledCommand(payload)
     updateAttr("saturation", value)
+    updateAttr("colorMode", "RGB")
 }
 
 def setColorTemperature(value) {
@@ -961,7 +963,8 @@ private updateColorInformation(seg) {
         
         if (!isEffect && seg?.col && seg.col[0]) {
             def rgb = seg.col[0]
-            def estimatedKelvin = estimateColorTemperature(rgb[0], rgb[1], rgb[2])
+            def currentColorMode = device.currentValue("colorMode")
+            def estimatedKelvin = (currentColorMode != "RGB") ? estimateColorTemperature(rgb[0], rgb[1], rgb[2]) : null
             if (estimatedKelvin) {
                 updateAttr("colorTemperature", estimatedKelvin)
                 setGenericNameFromTemp(estimatedKelvin)

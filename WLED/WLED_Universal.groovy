@@ -15,6 +15,9 @@
  *
  * Changelog
  *
+ * v1.3.6 (2026-03-24)
+ * feat: Added setHue and setSaturation commands to fix HomeKit / Apple Home color control (fixes GitHub issue #3)
+ *
  * v1.3.5 (2025-10-17)
  * feat: Set commands (setEffect, setPalette, setPreset, setPlaylist) now automatically turn on device for more intuitive behavior
  * fix: Fixed playlist activation - playlists now properly turn on device and can be stopped with off() command
@@ -430,6 +433,23 @@ def setColor(value) {
     def level = (value.level * 2.55).toInteger()
     def payload = [on: true, seg: [[id: ledSegment.toInteger(), on: true, bri: level, col: [rgb], fx: 0]]]
     sendWledCommand(payload)
+}
+
+def setHue(value) {
+    def segmentId = ledSegment?.toInteger() ?: 0
+    def rgb = hsvToRgb(value, device.currentValue("saturation") ?: 100, 100)
+    def payload = [on: true, seg: [[id: segmentId, on: true, col: [rgb], fx: 0]]]
+    sendWledCommand(payload)
+    updateAttr("hue", value)
+    setGenericNameFromHue(value)
+}
+
+def setSaturation(value) {
+    def segmentId = ledSegment?.toInteger() ?: 0
+    def rgb = hsvToRgb(device.currentValue("hue") ?: 0, value, 100)
+    def payload = [on: true, seg: [[id: segmentId, on: true, col: [rgb], fx: 0]]]
+    sendWledCommand(payload)
+    updateAttr("saturation", value)
 }
 
 def setColorTemperature(value) {

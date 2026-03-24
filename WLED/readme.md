@@ -1,4 +1,4 @@
-# Enhanced WLED Driver for Hubitat Elevation v1.3.4
+# Enhanced WLED Driver for Hubitat Elevation v1.3.6
 
 A comprehensive, Hubitat Elevation community driver for WLED devices with advanced features, name-based control, and robust error handling. Built upon the original work by Bryan Li and extensively enhanced for modern WLED installations.
 
@@ -142,6 +142,13 @@ The driver provides comprehensive state information for use in dashboards and au
 ---
 
 ## 🔄 Version History
+
+### **v1.3.6**
+**Bug Fixes:**
+- **HomeKit / Apple Home Support:** Added missing `setHue` and `setSaturation` commands required by the Hubitat HomeKit Bridge and other integrations that call these independently (fixes [GitHub issue #3](https://github.com/obeisser/hubitat-drivers/issues/3))
+- **Color Attribute Consistency:** `setHue`, `setSaturation`, `setLevel`, and `setColor` now all correctly update the composite `color` attribute and `colorName` immediately, without waiting for state sync
+- **Color Name Fix:** `colorName` no longer incorrectly shows a color temperature name (e.g., "Skylight") after setting a hue-based color
+- **hsvToRgb Fix:** `hue=100` no longer returns black (causing the light to turn off) — it now correctly wraps to red
 
 ### **v1.3.5**
 **Bug Fixes & Enhancements:**

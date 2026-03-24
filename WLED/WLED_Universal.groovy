@@ -16,7 +16,8 @@
  * Changelog
  *
  * v1.3.6 (2026-03-24)
- * feat: Added setHue and setSaturation commands to fix HomeKit / Apple Home color control (fixes GitHub issue #3)
+ * fix: Added missing setHue and setSaturation commands to fix HomeKit / Apple Home color control (fixes GitHub issue #3)
+ * fix: fixed inconsitensies in color and colorName attributes 
  *
  * v1.3.5 (2025-10-17)
  * feat: Set commands (setEffect, setPalette, setPreset, setPlaylist) now automatically turn on device for more intuitive behavior
@@ -424,6 +425,7 @@ def setLevel(value, rate = null) {
     else {
         def brightness = (value * 2.55).toInteger()
         sendWledCommand([on: true, seg: [[id: getCurrentSegmentId(), on: true, bri: brightness]]], rate)
+        updateAttr("color", [hue: device.currentValue("hue") ?: 0, saturation: device.currentValue("saturation") ?: 100, level: value])
     }
 }
 
@@ -433,6 +435,12 @@ def setColor(value) {
     def level = (value.level * 2.55).toInteger()
     def payload = [on: true, seg: [[id: ledSegment.toInteger(), on: true, bri: level, col: [rgb], fx: 0]]]
     sendWledCommand(payload)
+    updateAttr("hue", value.hue)
+    updateAttr("saturation", value.saturation)
+    updateAttr("level", value.level)
+    updateAttr("colorMode", "RGB")
+    updateAttr("color", [hue: value.hue, saturation: value.saturation, level: value.level])
+    setGenericNameFromHue(value.hue)
 }
 
 def setHue(value) {
@@ -442,6 +450,7 @@ def setHue(value) {
     sendWledCommand(payload)
     updateAttr("hue", value)
     updateAttr("colorMode", "RGB")
+    updateAttr("color", [hue: value, saturation: device.currentValue("saturation") ?: 100, level: device.currentValue("level") ?: 100])
     setGenericNameFromHue(value)
 }
 
@@ -452,6 +461,8 @@ def setSaturation(value) {
     sendWledCommand(payload)
     updateAttr("saturation", value)
     updateAttr("colorMode", "RGB")
+    updateAttr("color", [hue: device.currentValue("hue") ?: 0, saturation: value, level: device.currentValue("level") ?: 100])
+    setGenericNameFromHue(device.currentValue("hue") ?: 0)
 }
 
 def setColorTemperature(value) {

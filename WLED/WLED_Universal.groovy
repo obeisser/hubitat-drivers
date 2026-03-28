@@ -17,7 +17,7 @@
  *
  * v1.3.6 (2026-03-24)
  * fix: Added missing setHue and setSaturation commands to fix HomeKit / Apple Home color control (fixes GitHub issue #3)
- * fix: fixed inconsitensies in color and colorName attributes 
+ * fix: Fixed inconsistencies in color and colorName attributes 
  *
  * v1.3.5 (2025-10-17)
  * feat: Set commands (setEffect, setPalette, setPreset, setPlaylist) now automatically turn on device for more intuitive behavior

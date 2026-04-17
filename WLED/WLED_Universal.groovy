@@ -15,6 +15,10 @@
  *
  * Changelog
  *
+ * v1.3.7 (2026-04-17)
+ * fix: List commands (listEffects, listPalettes, listPresets, listPlaylists) now always fetch fresh data from WLED instead of using cached state
+ * fix: refresh and forceRefresh now always update presets and playlists, with forceRefresh sequencing the preset fetch after the full response to avoid overloading the device
+ *
  * v1.3.6 (2026-03-24)
  * fix: Added missing setHue and setSaturation commands to fix HomeKit / Apple Home color control (fixes GitHub issue #3)
  * fix: Fixed inconsistencies in color and colorName attributes 
@@ -394,11 +398,14 @@ private handleFullResponse(Map msg) {
         setSchedule()
         state.initialized = true
         runIn(2, getDeviceInfo)
-        runIn(4, getPresets)  // Presets endpoint includes both presets and playlists
+        runIn(4, getPresets)
         runIn(6, listEffects)
         runIn(7, listPalettes)
         runIn(8, listPresets)
         runIn(9, listPlaylists)
+    } else {
+        // On subsequent forceRefresh calls, still update presets/playlists
+        runIn(3, getPresets)
     }
 }
 
@@ -475,7 +482,10 @@ def setColorTemperature(value) {
     setGenericNameFromTemp(value)
 }
 
-def refresh() { sendEthernetGet(WLED_ENDPOINTS.STATE) }
+def refresh() { 
+    sendEthernetGet(WLED_ENDPOINTS.STATE)
+    runIn(2, getPresets)
+}
 
 //--- CUSTOM COMMANDS ---//
 def forceRefresh() {
@@ -544,27 +554,13 @@ def setPalette(paletteIdOrName) {
 }
 
 def listEffects() {
-    if (!getEffectsData()) {
-        log.warn "Effects list not available. Refreshing device..."
-        forceRefresh()
-        return
-    }
-    
-    def effectsList = getEffectsList()
-    log.info "Available Effects (${getEffectsData().size()}): ${effectsList}"
-    updateAttr("availableEffects", effectsList)
+    if (logEnable) log.debug "Fetching latest effects from device..."
+    forceRefresh()
 }
 
 def listPalettes() {
-    if (!getPalettesData()) {
-        log.warn "Palettes list not available. Refreshing device..."
-        forceRefresh()
-        return
-    }
-    
-    def palettesList = getPalettesList()
-    log.info "Available Palettes (${getPalettesData().size()}): ${palettesList}"
-    updateAttr("availablePalettes", palettesList)
+    if (logEnable) log.debug "Fetching latest palettes from device..."
+    forceRefresh()
 }
 
 def setPreset(presetIdOrName) {
@@ -791,20 +787,8 @@ def deletePreset(Number presetId) {
 }
 
 def listPresets() {
-    try {
-        if (!getPresetsData() || getPresetsData().size() == 0) {
-            log.warn "Presets not available. Refreshing device..."
-            getPresets()
-            return
-        }
-        
-        def presetsList = getPresetsList()
-        log.info "Available Presets (${getPresetsData().size()}): ${presetsList}"
-        updateAttr("availablePresets", presetsList)
-    } catch (Exception e) {
-        log.error "Error listing presets: ${e.message}"
-        updateAttr("availablePresets", "Error loading presets")
-    }
+    if (logEnable) log.debug "Fetching latest presets from device..."
+    getPresets()
 }
 
 def getPresets() {
@@ -844,20 +828,8 @@ def nextPresetInPlaylist() {
 }
 
 def listPlaylists() {
-    try {
-        if (!getPlaylistsData() || getPlaylistsData().size() == 0) {
-            log.warn "Playlists not available. Refreshing device..."
-            getPresets() // Playlists are included in presets endpoint
-            return
-        }
-        
-        def playlistsList = getPlaylistsList()
-        log.info "Available Playlists (${getPlaylistsData().size()}): ${playlistsList}"
-        updateAttr("availablePlaylists", playlistsList)
-    } catch (Exception e) {
-        log.error "Error listing playlists: ${e.message}"
-        updateAttr("availablePlaylists", "Error loading playlists")
-    }
+    if (logEnable) log.debug "Fetching latest playlists from device..."
+    getPresets() // Playlists are included in presets endpoint
 }
 
 //--- NIGHTLIGHT COMMANDS ---//
@@ -1016,16 +988,10 @@ private updateEffectInformation(seg) {
         effectAttrs.effectDirection = isReverse ? "reverse" : "forward"
         effectAttrs.reverse = isReverse ? "on" : "off"
         
-        // Update available lists when effects/palettes are loaded (only if not already set)
-        if (getEffectsData() && !device.currentValue("availableEffects")) {
-            effectAttrs.availableEffects = getEffectsList()
-        }
-        if (getPalettesData() && !device.currentValue("availablePalettes")) {
-            effectAttrs.availablePalettes = getPalettesList()
-        }
-        if (getPlaylistsData() && !device.currentValue("availablePlaylists")) {
-            effectAttrs.availablePlaylists = getPlaylistsList()
-        }
+        // Always update available lists when data is loaded
+        if (getEffectsData()) effectAttrs.availableEffects = getEffectsList()
+        if (getPalettesData()) effectAttrs.availablePalettes = getPalettesList()
+        if (getPlaylistsData()) effectAttrs.availablePlaylists = getPlaylistsList()
         
         batchUpdateAttributes(effectAttrs)
     } catch (Exception e) {

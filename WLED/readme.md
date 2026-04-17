@@ -1,4 +1,4 @@
-# Enhanced WLED Driver for Hubitat Elevation v1.3.6
+# Enhanced WLED Driver for Hubitat Elevation v1.3.7
 
 A comprehensive, Hubitat Elevation community driver for WLED devices with advanced features, name-based control, and robust error handling. Built upon the original work by Bryan Li and extensively enhanced for modern WLED installations.
 
@@ -142,6 +142,11 @@ The driver provides comprehensive state information for use in dashboards and au
 ---
 
 ## 🔄 Version History
+
+### **v1.3.7**
+**Bug Fixes:**
+- **List Commands:** `listEffects`, `listPalettes`, `listPresets`, and `listPlaylists` now always fetch fresh data from WLED instead of using cached state
+- **Refresh:** `refresh` and `forceRefresh` now always update presets and playlists, with `forceRefresh` sequencing the preset fetch after the full response to avoid overloading the device
 
 ### **v1.3.6**
 **Bug Fixes:**

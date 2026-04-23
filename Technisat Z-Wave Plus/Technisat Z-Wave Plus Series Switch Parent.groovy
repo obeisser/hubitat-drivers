@@ -11,9 +11,31 @@ import groovy.transform.Field
     0x20: 1,    // Basic
     0x25: 1,    // Switch Binary
     0x32: 3,    // Meter
+    0x5A: 1,    // Device Reset Locally
     0x5B: 3,    // Central Scene (v3 supports keyAttributes 0-6 / up to 5x taps)
+    0x59: 1,    // Association Group Info
     0x60: 3,    // Multi Channel
-    0x70: 1     // Configuration
+    0x6C: 1,    // Supervision
+    0x70: 1,    // Configuration
+    0x71: 4,    // Notification
+    0x72: 2,    // Manufacturer Specific
+    0x85: 2,    // Association
+    0x86: 2,    // Version
+    0x8E: 3     // Multi Channel Association
+]
+
+// Command class names for the version report state variable
+@Field static Map CC_NAMES = [
+    0x20: "Basic",                  0x25: "Switch Binary",
+    0x32: "Meter",                  0x5A: "Device Reset Locally",
+    0x5B: "Central Scene",          0x59: "Association Group Info",
+    0x60: "Multi Channel",          0x6C: "Supervision",
+    0x70: "Configuration",          0x71: "Notification",
+    0x72: "Manufacturer Specific",  0x85: "Association",
+    0x86: "Version",                0x8E: "Multi Channel Association",
+    0x55: "Transport Service",      0x98: "Security",
+    0x9F: "Security 2",             0x73: "Powerlevel",
+    0x7A: "Firmware Update",        0x8F: "Multi Instance"
 ]
 
 metadata {
@@ -28,6 +50,7 @@ metadata {
 
         // Custom attribute supporting [Button].[TapCount] format (e.g., "4.2")
         attribute "multiTapButton", "STRING"
+        attribute "powerNotification", "NUMBER"
 
         command "push", ["NUMBER"]
         command "hold", ["NUMBER"]
@@ -38,6 +61,7 @@ metadata {
             [name:"Number of Taps*",  type: "NUMBER", description: "Enter 2, 3, 4, or 5"]
         ]
         command "recreateChildDevices"
+        command "getDeviceInfo"
 
         fingerprint mfr: "0299", prod: "0003", deviceId: "1A91",
             inClusters: "0x5E,0x25,0x32,0x55,0x59,0x5A,0x5B,0x6C,0x70,0x71,0x72,0x73,0x7A,0x85,0x86,0x98,0x9F,0x60,0x8E",
@@ -74,18 +98,21 @@ void configure() {
     sendEvent(name: "numberOfButtons", value: 4)
     recreateChildDevices()
     sendToDevice(delayBetween(buildConfigCmds(), 500))
+    runIn(3, "getDeviceInfo")
 }
 
 void updated() {
     log.info "Updated."
     if (logEnable) runIn(1800, logsOff)
-    recreateChildDevices()
+    // Child devices are managed via configure() or the manual recreateChildDevices command.
+    // Do not recreate here to avoid unnecessary overhead on every preference save.
     sendToDevice(delayBetween(buildConfigCmds(), 500))
 }
 
 // Shared helper — avoids duplicating the three configurationSet calls
 private List<String> buildConfigCmds() {
     return [
+        secure(zwave.associationV2.associationSet(groupingIdentifier: 1, nodeId: [zwaveHubNodeId])),
         secure(zwave.configurationV1.configurationSet(parameterNumber: 1, size: 1, scaledConfigurationValue: param1 ? param1.toInteger() : 1)),
         secure(zwave.configurationV1.configurationSet(parameterNumber: 2, size: 2, scaledConfigurationValue: param2 ? param2.toInteger() : 6)),
         secure(zwave.configurationV1.configurationSet(parameterNumber: 3, size: 2, scaledConfigurationValue: param3 ? param3.toInteger() : 10))
@@ -158,20 +185,21 @@ void zwaveEvent(hubitat.zwave.commands.centralscenev3.CentralSceneNotification c
     }
 }
 
-// Basic reports — some devices send these instead of SwitchBinary
+// Basic/SwitchBinary reports arriving at root without multi-channel encapsulation.
+// We can't determine which endpoint triggered it, so refresh both to sync state.
 void zwaveEvent(hubitat.zwave.commands.basicv1.BasicReport cmd) {
-    if (logEnable) log.debug "Root BasicReport: ${cmd}"
-    routeSwitchToChild(1, cmd.value)
+    if (logEnable) log.debug "Root BasicReport (non-encapsulated): ${cmd} — refreshing all endpoints"
+    refresh()
 }
 
 void zwaveEvent(hubitat.zwave.commands.switchbinaryv1.SwitchBinaryReport cmd) {
-    if (logEnable) log.debug "Root SwitchBinaryReport: ${cmd}"
-    routeSwitchToChild(1, cmd.value)
+    if (logEnable) log.debug "Root SwitchBinaryReport (non-encapsulated): ${cmd} — refreshing all endpoints"
+    refresh()
 }
 
 void zwaveEvent(hubitat.zwave.commands.meterv3.MeterReport cmd) {
-    if (logEnable) log.debug "Root MeterReport: ${cmd}"
-    routeMeterToChild(1, cmd)
+    if (logEnable) log.debug "Root MeterReport (non-encapsulated): ${cmd} — refreshing all endpoints"
+    refresh()
 }
 
 void zwaveEvent(hubitat.zwave.commands.multichannelv3.MultiChannelCmdEncap cmd) {
@@ -180,17 +208,53 @@ void zwaveEvent(hubitat.zwave.commands.multichannelv3.MultiChannelCmdEncap cmd) 
         if (logEnable) log.debug "MultiChannelCmdEncap: could not encapsulate (missing commandClassVersions entry?)"
         return
     }
-    if (logEnable) log.debug "MultiChannelCmdEncap ep=${cmd.sourceEndPoint}: ${encapCmd}"
-    def child = getChildDevice("${device.deviceNetworkId}-${cmd.sourceEndPoint}")
+    
+    // Some Z-Wave Plus devices report using destinationEndPoint instead of sourceEndPoint
+    // Try sourceEndPoint first, fall back to destinationEndPoint
+    def ep = cmd.sourceEndPoint ?: cmd.destinationEndPoint
+    if (logEnable) log.debug "MultiChannelCmdEncap ep=${ep} (src=${cmd.sourceEndPoint}, dst=${cmd.destinationEndPoint}): ${encapCmd}"
+    
+    def child = getChildDevice("${device.deviceNetworkId}-${ep}")
     if (child) {
         childZwaveEvent(child, encapCmd)
     } else {
-        if (logEnable) log.debug "No child for endpoint ${cmd.sourceEndPoint} — dropped: ${encapCmd}"
+        if (logEnable) log.debug "No child for endpoint ${ep} — dropped: ${encapCmd}"
     }
 }
 
 void zwaveEvent(hubitat.zwave.Command cmd) {
     if (logEnable) log.debug "Unhandled Z-Wave command: ${cmd}"
+}
+
+// Supervision — required for Z-Wave Plus S2; acknowledge supervised frames
+void zwaveEvent(hubitat.zwave.commands.supervisionv1.SupervisionGet cmd) {
+    if (logEnable) log.debug "SupervisionGet: ${cmd}"
+    def encapCmd = cmd.encapsulatedCommand(commandClassVersions)
+    if (encapCmd) zwaveEvent(encapCmd)
+    sendToDevice(secure(zwave.supervisionV1.supervisionReport(
+        sessionID: cmd.sessionID, reserved: 0, moreStatusUpdates: false, status: 0xFF)))
+}
+
+// Notification — device advertises 0x71; log and handle overload/fault reports
+void zwaveEvent(hubitat.zwave.commands.notificationv4.NotificationReport cmd) {
+    if (logEnable) log.debug "NotificationReport: notificationType=${cmd.notificationType} event=${cmd.event}"
+    // Notification type 0x08 = Power Management (e.g. overload)
+    if (cmd.notificationType == 0x08) {
+        String msg = "${device.displayName}: Power Management notification — event ${cmd.event}"
+        log.warn msg
+        sendEvent(name: "powerNotification", value: cmd.event, descriptionText: msg, isStateChange: true)
+    }
+}
+
+// Device was factory-reset locally — log a prominent warning to aid mesh troubleshooting
+void zwaveEvent(hubitat.zwave.commands.deviceresetlocallyv1.DeviceResetLocallyNotification cmd) {
+    log.warn "${device.displayName}: Device was factory-reset locally! It may have left the Z-Wave mesh. Re-pair the device and run Configure."
+}
+
+// Configuration echo-back — logs the value the device actually stored for a parameter.
+// Useful when verifying preference writes or diagnosing rejected parameter values.
+void zwaveEvent(hubitat.zwave.commands.configurationv1.ConfigurationReport cmd) {
+    if (logEnable) log.debug "ConfigurationReport: parameter ${cmd.parameterNumber} = ${cmd.scaledConfigurationValue}"
 }
 
 // ---------------------------------------------------------------------------
@@ -229,10 +293,17 @@ private void routeSwitchToChild(def childOrEp, Number rawValue) {
 private void routeMeterToChild(def childOrEp, hubitat.zwave.commands.meterv3.MeterReport cmd) {
     def child = (childOrEp instanceof Integer) ? getChildDevice("${device.deviceNetworkId}-${childOrEp}") : childOrEp
     if (!child) { if (logEnable) log.debug "routeMeterToChild: no child found for ${childOrEp}"; return }
-    if (cmd.scale == 0) {
-        child.sendEvent(name: "energy", value: cmd.scaledMeterValue, unit: "kWh")
-    } else if (cmd.scale == 2) {
-        child.sendEvent(name: "power",  value: cmd.scaledMeterValue, unit: "W")
+    // meterType 1 = Electric. scale 0 = kWh (energy), scale 2 = W (power)
+    if (cmd.meterType == 1) {
+        if (cmd.scale == 0) {
+            child.sendEvent(name: "energy", value: cmd.scaledMeterValue, unit: "kWh")
+        } else if (cmd.scale == 2) {
+            child.sendEvent(name: "power",  value: cmd.scaledMeterValue, unit: "W")
+        } else {
+            if (logEnable) log.debug "routeMeterToChild: unhandled electric meter scale ${cmd.scale} from ${child.displayName}"
+        }
+    } else {
+        if (logEnable) log.debug "routeMeterToChild: unhandled meterType ${cmd.meterType} from ${child.displayName}"
     }
 }
 
@@ -259,21 +330,25 @@ private void sendMultiTapEvent(Integer button, Integer taps, String type = "phys
 
 void push(def button) {
     Integer btn = button?.toInteger() ?: 1
+    if (btn < 1 || btn > 4) { log.warn "push: invalid button ${btn} (must be 1-4)"; return }
     sendButtonEvent("pushed", btn, "pushed", "digital")
 }
 
 void hold(def button) {
     Integer btn = button?.toInteger() ?: 1
+    if (btn < 1 || btn > 4) { log.warn "hold: invalid button ${btn} (must be 1-4)"; return }
     sendButtonEvent("held", btn, "held", "digital")
 }
 
 void release(def button) {
     Integer btn = button?.toInteger() ?: 1
+    if (btn < 1 || btn > 4) { log.warn "release: invalid button ${btn} (must be 1-4)"; return }
     sendButtonEvent("released", btn, "released", "digital")
 }
 
 void doubleTap(def button) {
     Integer btn = button?.toInteger() ?: 1
+    if (btn < 1 || btn > 4) { log.warn "doubleTap: invalid button ${btn} (must be 1-4)"; return }
     sendButtonEvent("doubleTapped", btn, "double-tapped", "digital")
     sendMultiTapEvent(btn, 2, "digital")
 }
@@ -309,12 +384,18 @@ void refresh() {
 
 void componentOn(def child) {
     int ep = childEp(child)
-    sendToDevice(secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.switchBinaryV1.switchBinarySet(switchValue: 0xFF))))
+    sendToDevice(delayBetween([
+        secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.switchBinaryV1.switchBinarySet(switchValue: 0xFF))),
+        secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.switchBinaryV1.switchBinaryGet()))
+    ], 200))
 }
 
 void componentOff(def child) {
     int ep = childEp(child)
-    sendToDevice(secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.switchBinaryV1.switchBinarySet(switchValue: 0x00))))
+    sendToDevice(delayBetween([
+        secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.switchBinaryV1.switchBinarySet(switchValue: 0x00))),
+        secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.switchBinaryV1.switchBinaryGet()))
+    ], 200))
 }
 
 void componentRefresh(def child) {
@@ -330,6 +411,67 @@ void componentReset(def child) {
     int ep = childEp(child)
     if (logEnable) log.debug "Resetting energy meter for endpoint ${ep}"
     sendToDevice(secure(zwave.multiChannelV3.multiChannelCmdEncap(destinationEndPoint: ep).encapsulate(zwave.meterV3.meterReset())))
+}
+
+// ---------------------------------------------------------------------------
+// Device Info — queries firmware, manufacturer, CC versions, and associations
+// ---------------------------------------------------------------------------
+
+void getDeviceInfo() {
+    log.info "Requesting device info (firmware, manufacturer, CC versions, associations)."
+    List<String> cmds = [
+        secure(zwave.versionV2.versionGet()),
+        secure(zwave.manufacturerSpecificV2.manufacturerSpecificGet()),
+        secure(zwave.associationV2.associationGet(groupingIdentifier: 1)),
+        secure(zwave.multiChannelAssociationV3.multiChannelAssociationGet(groupingIdentifier: 1))
+    ]
+    // Request version for each supported CC so we know what the device actually implements
+    commandClassVersions.each { cc, ver ->
+        cmds << secure(zwave.versionV2.versionCommandClassGet(requestedCommandClass: cc))
+    }
+    sendToDevice(delayBetween(cmds, 200))
+}
+
+void zwaveEvent(hubitat.zwave.commands.versionv2.VersionReport cmd) {
+    if (logEnable) log.debug "VersionReport: ${cmd}"
+    String fw = "${cmd.firmware0Version}.${String.format('%02d', cmd.firmware0SubVersion)}"
+    String proto = "${cmd.zWaveProtocolVersion}.${String.format('%02d', cmd.zWaveProtocolSubVersion)}"
+    state.firmware          = fw
+    state.zWaveProtocol     = proto
+    state.hardwareVersion   = cmd.hardwareVersion ?: "N/A"
+    if (txtEnable) log.info "${device.displayName}: Firmware ${fw}, Z-Wave protocol ${proto}"
+}
+
+void zwaveEvent(hubitat.zwave.commands.versionv2.VersionCommandClassReport cmd) {
+    if (logEnable) log.debug "VersionCommandClassReport: CC=0x${Integer.toHexString(cmd.requestedCommandClass).toUpperCase()} v${cmd.commandClassVersion}"
+    if (cmd.commandClassVersion == 0) return   // 0 = not supported by device
+    String ccHex  = "0x${Integer.toHexString(cmd.requestedCommandClass).toUpperCase().padLeft(2,'0')}"
+    String ccName = CC_NAMES[cmd.requestedCommandClass] ?: ccHex
+    Map ccVersions = state.ccVersions ?: [:]
+    ccVersions["${ccName} (${ccHex})"] = cmd.commandClassVersion
+    state.ccVersions = ccVersions.sort()
+}
+
+void zwaveEvent(hubitat.zwave.commands.manufacturerspecificv2.ManufacturerSpecificReport cmd) {
+    if (logEnable) log.debug "ManufacturerSpecificReport: ${cmd}"
+    state.manufacturer   = "0x${Integer.toHexString(cmd.manufacturerId).toUpperCase().padLeft(4,'0')}"
+    state.productType    = "0x${Integer.toHexString(cmd.productTypeId).toUpperCase().padLeft(4,'0')}"
+    state.productId      = "0x${Integer.toHexString(cmd.productId).toUpperCase().padLeft(4,'0')}"
+    if (txtEnable) log.info "${device.displayName}: Manufacturer ${state.manufacturer}, ProductType ${state.productType}, ProductId ${state.productId}"
+}
+
+void zwaveEvent(hubitat.zwave.commands.associationv2.AssociationReport cmd) {
+    if (logEnable) log.debug "AssociationReport: group ${cmd.groupingIdentifier} nodes ${cmd.nodeId}"
+    Map assoc = state.associations ?: [:]
+    assoc["Group ${cmd.groupingIdentifier}"] = cmd.nodeId ?: []
+    state.associations = assoc
+}
+
+void zwaveEvent(hubitat.zwave.commands.multichannelassociationv3.MultiChannelAssociationReport cmd) {
+    if (logEnable) log.debug "MultiChannelAssociationReport: group ${cmd.groupingIdentifier} nodes ${cmd.nodeId} multiChannelNodes ${cmd.multiChannelNodeIds}"
+    Map assoc = state.mcAssociations ?: [:]
+    assoc["Group ${cmd.groupingIdentifier}"] = [nodes: cmd.nodeId ?: [], mcNodes: cmd.multiChannelNodeIds ?: []]
+    state.mcAssociations = assoc
 }
 
 // ---------------------------------------------------------------------------

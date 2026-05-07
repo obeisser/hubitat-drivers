@@ -138,10 +138,21 @@ preferences {
         
         section("Manual OAuth Completion") {
             if (state.accessToken) {
-                paragraph "✅ OAuth completed successfully!"
-                paragraph "Access token: ${state.accessToken?.take(20)}..."
-                paragraph "Token expires: ${new Date(state.tokenExpiresAt ?: 0)}"
-                paragraph "Discovered devices: ${state.discoveredDevices?.size() ?: 0}"
+                Long expiresAt = state.tokenExpiresAt ?: 0
+                boolean expiryKnown = expiresAt > 1000000000000L
+                String expiryStr = expiryKnown ? new Date(expiresAt).format('yyyy-MM-dd HH:mm:ss') : "⚠️ UNKNOWN — re-authorization required"
+                String refreshStr = state.refreshToken ? "✅ Present" : "❌ MISSING — re-authorization required"
+                
+                paragraph "✅ Access token: ${state.accessToken?.take(20)}..."
+                paragraph "🔄 Refresh token: ${refreshStr}"
+                paragraph "⏰ Token expires: ${expiryStr}"
+                paragraph "📱 Discovered devices: ${state.discoveredDevices?.size() ?: 0}"
+                
+                if (!state.refreshToken || !expiryKnown) {
+                    paragraph "<b>⚠️ Token state is incomplete. You need to re-authorize.</b>"
+                    paragraph "Click 'Clear Token & Re-authorize' below, then complete the OAuth flow."
+                    input name: "clearAndReauth", type: "button", title: "Clear Token & Re-authorize", submitOnChange: true
+                }
             } else {
                 paragraph "If OAuth redirect fails, you can manually complete the process:"
                 paragraph "From your redirect URL, copy ONLY the authorization code (after 'code=' and before '&state')"
@@ -169,7 +180,15 @@ preferences {
                 paragraph "Please go back and configure your Client ID and Client Secret first."
                 href(name: "backToMain", title: "← Back to Configuration", page: "mainPage")
             } else if (!state.accessToken) {
-                href(name: "authLink", title: "Click to authorize with Miele", url: getAuthorizationUrl(), description: "You must authorize this app to connect to your Miele account.")
+                String authUrl = getAuthorizationUrl()
+                paragraph "<b>Step 1 — Open this URL in a new browser tab:</b>"
+                paragraph "<textarea rows='5' style='width:100%;font-size:11px;word-break:break-all;'>${authUrl}</textarea>"
+                paragraph "<b>Step 2 — Log in to your Miele account and grant access.</b>"
+                paragraph "<b>Step 3 — After authorizing, your browser will land on a page at cloud.hubitat.com.</b>"
+                paragraph "The URL will contain <code>code=DE_xxxxxxx</code>. Copy everything after <code>code=</code> and before <code>&state</code>."
+                paragraph "Example: if the URL contains <code>code=DE_abc123&state=xyz</code>, copy only: <code>DE_abc123</code>"
+                input name: "manualAuthCode", type: "text", title: "Paste Authorization Code here", description: "e.g. DE_abc123..."
+                input name: "completeOAuth", type: "button", title: "Complete Authorization", submitOnChange: true
             } else {
                 paragraph "✓ You are connected to Miele. Click 'Next' to select your devices."
             }
@@ -214,13 +233,27 @@ def initialize() {
     // Clear discovered devices on re-initialization to force a fresh pull
     if (!state.accessToken) {
         state.discoveredDevices = [:]
+        state.tokenExpiresAt = 0  // Only reset expiry when there is no token
     }
-    state.tokenExpiresAt = 0
+    // Do NOT reset tokenExpiresAt when a valid token already exists —
+    // doing so causes every settings save to invalidate the token and
+    // silently break all subsequent API calls until the next refresh cycle.
 }
 
 // Manual OAuth completion for when automatic callback fails
 def appButtonHandler(btn) {
     switch (btn) {
+        case "clearAndReauth":
+            log.info "Clearing token state and preparing for re-authorization"
+            state.accessToken = null
+            state.refreshToken = null
+            state.tokenExpiresAt = 0
+            state.oauthCode = null
+            state.tokenRefreshAttempts = 0
+            state.lastTokenRefreshAttempt = 0
+            log.info "Token state cleared. Please complete OAuth authorization again."
+            break
+            
         case "completeOAuth":
             if (settings.manualAuthCode) {
                 log.info "Attempting manual OAuth completion with provided authorization code"
@@ -258,11 +291,11 @@ def appButtonHandler(btn) {
         case "testConnection":
             log.info "=== Testing API Connection ==="
             if (state.accessToken) {
+                Long expiresAt = state.tokenExpiresAt ?: 0
+                boolean expiryKnown = expiresAt > 1000000000000L
                 log.info "Access Token: ${state.accessToken?.take(30)}..."
-                log.info "Token Expires: ${new Date(state.tokenExpiresAt ?: 0)}"
+                log.info "Token Expires: ${expiryKnown ? new Date(expiresAt).toString() : 'UNKNOWN (will recover on next request)'}"
                 log.info "API Version: ${settings?.apiVersion ?: 'new'}"
-                log.info "Endpoint: ${MIELE_API_BASE}${MIELE_DEVICES_PATH}"
-                log.info "Authorization: Bearer ${state.accessToken?.take(20)}..."
                 log.info "Sending test request..."
                 discoverDevices()
             } else {
@@ -275,46 +308,66 @@ def appButtonHandler(btn) {
 }
 
 // OAuth Methods
-def oauthCallback(response) {
-    log.info "oauthCallback called with response: ${response}"
+def oauthCallback() {
+    log.info "oauthCallback called with params: ${params}"
     
-    // Handle different response formats
-    String authCode = null
-    String receivedState = null
+    // Hubitat's OAuth relay forwards the authorization code as query parameters
+    String authCode = params?.code
     
-    if (response?.code) {
-        authCode = response.code
-        receivedState = response.state
-    } else if (response?.params?.code) {
-        authCode = response.params.code
-        receivedState = response.params.state
-    } else {
-        log.error "No authorization code found in OAuth callback response"
-        log.error "Full response: ${response}"
-        return
-    }
-    
-    // Validate state parameter
-    if (receivedState != state.oauthInitState) {
-        log.error "OAuth state mismatch. Expected: ${state.oauthInitState}, Received: ${receivedState}"
-        return
+    if (!authCode) {
+        log.error "No authorization code found in OAuth callback"
+        log.error "Full params: ${params}"
+        return renderOAuthFailure("No authorization code received")
     }
     
     log.info "Authorization code received: ${authCode?.take(10)}..."
     state.oauthCode = authCode
     getTokenFromCode()
+    
+    // Return a simple HTML page that tells the user to close the tab
+    return renderOAuthSuccess()
+}
+
+private String renderOAuthSuccess() {
+    String html = """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Miele Authorization Complete</title></head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1 style="color: green;">✓ Authorization Successful</h1>
+        <p>You have successfully authorized Hubitat to access your Miele account.</p>
+        <p>You can close this window and return to the Hubitat app.</p>
+        <script>setTimeout(function() { window.close(); }, 3000);</script>
+    </body>
+    </html>
+    """
+    render contentType: "text/html", data: html
+}
+
+private String renderOAuthFailure(String message) {
+    String html = """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Miele Authorization Failed</title></head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1 style="color: red;">✗ Authorization Failed</h1>
+        <p>${message}</p>
+        <p>Please return to the Hubitat app and try again.</p>
+    </body>
+    </html>
+    """
+    render contentType: "text/html", data: html
 }
 
 String getAuthorizationUrl() {
     if (!settings?.clientId) {
         log.error "Client ID not configured"
-        return "javascript:alert('Please configure Client ID first');"
+        return "(Client ID not configured)"
     }
     
+    // Use a simple random state value — we don't need it for validation since
+    // the user will manually copy the auth code from the redirect URL.
     state.oauthInitState = UUID.randomUUID().toString()
-    
-    // Use the standard Hubitat OAuth redirect URI
-    String redirectUri = OAUTH_REDIRECT_URI
     
     def oauthParams = [
         "response_type": "code",
@@ -324,14 +377,12 @@ String getAuthorizationUrl() {
         "state": state.oauthInitState
     ]
     
-    // Choose OAuth endpoint based on API version
     String authEndpoint = (settings?.apiVersion == "legacy") ? 
         "${MIELE_AUTH_BASE_LEGACY}${MIELE_LOGIN_PATH_LEGACY}" :
         "${MIELE_AUTH_BASE_NEW}${MIELE_AUTH_PATH_NEW}"
     
     String authUrl = "${authEndpoint}?${toQueryString(oauthParams)}"
-    log.info "Generated OAuth URL using ${settings?.apiVersion == 'legacy' ? 'Legacy' : 'New'} API"
-    
+    log.info "Generated Miele OAuth URL"
     return authUrl
 }
 
@@ -375,17 +426,34 @@ def getTokenFromCode() {
 def tokenHandler(response, data) {
     try {
         if (response.hasError()) {
-            log.error "❌ HTTP Error in token exchange: ${response.getErrorMessage()}"
+            log.error "❌ HTTP Error in token exchange: ${response.getErrorMessage()} (HTTP ${response.status})"
             
-            // Handle 503 errors with exponential backoff
-            if (response.status == 503) {
+            // Log the full error body to understand what went wrong
+            try {
+                String errorBody = response.getErrorData() ?: response.data ?: "(no body)"
+                log.error "Token exchange error body: ${errorBody}"
+                def errorJson = new groovy.json.JsonSlurper().parseText(errorBody)
+                if (errorJson?.error)             log.error "OAuth error: ${errorJson.error}"
+                if (errorJson?.error_description) log.error "OAuth error description: ${errorJson.error_description}"
+            } catch (Exception ignored) {}
+            
+            if (response.status == 400) {
+                log.error "Bad Request (400) — the refresh token is likely expired or invalid."
+                log.error "You must re-authorize the app:"
+                log.error "  1. Go to Apps → Miele Connect Manager"
+                log.error "  2. Click through to 'Authorize Miele Account'"
+                log.error "  3. Complete the OAuth flow again"
+                // Clear the bad refresh token so we stop retrying
+                state.refreshToken = null
+                state.tokenExpiresAt = 0
+            } else if (response.status == 503) {
                 Integer attempts = state.tokenRefreshAttempts ?: 1
                 Integer backoffSeconds = Math.min(30 * Math.pow(2, attempts - 1), 3600) as Integer
                 log.error "Miele API temporarily unavailable (503). Will retry in ${backoffSeconds} seconds."
                 safeRunIn(backoffSeconds, "tokenRefreshJob")
             } else if (response.status == 401) {
                 log.error "Token refresh failed with 401 Unauthorized. You may need to re-authorize the app."
-                state.tokenRefreshAttempts = 0 // Reset counter
+                state.tokenRefreshAttempts = 0
             }
             return
         }
@@ -602,28 +670,58 @@ def revokedTokenHandler(response, data) {
 // Device Discovery
 def refreshDevices() {
     log.info "Manual device refresh triggered."
+    // Poll all child devices immediately for a fast manual refresh,
+    // then also run a full discovery to pick up any new devices.
+    if (state.accessToken) {
+        pollDeviceStatesOnce()
+    }
     discoverDevices()
 }
 
 def pollDeviceStates() {
     log.debug "Polling device states (SSE unavailable)"
+    state.pollScheduled = false  // Allow rescheduling
     
     if (!state.accessToken) {
         log.warn "Cannot poll devices - no access token"
         return
     }
     
-    // Poll each device individually
-    getChildDevices().each { device ->
-        String deviceId = device.deviceNetworkId
-        log.debug "Polling device: ${deviceId}"
-        authenticatedHttpGet("/v1/devices/${deviceId}", "devicePollHandler")
-    }
+    pollDeviceStatesOnce()
     
     // Schedule next poll based on device activity
     Integer nextPollInterval = getOptimalPollingInterval()
+    state.pollScheduled = true
     safeRunIn(nextPollInterval, "pollDeviceStates")
     log.debug "Next poll scheduled in ${nextPollInterval} seconds"
+}
+
+// Poll all child devices once without rescheduling — used for manual refresh
+// and as the inner body of pollDeviceStates so both paths share the same logic.
+def pollDeviceStatesOnce() {
+    if (!state.accessToken) {
+        log.warn "Cannot poll devices - no access token"
+        return
+    }
+    
+    // If tokenExpiresAt is unknown/corrupted, only delegate to discoverDevices
+    // if we also have a refresh token. Otherwise just attempt the poll directly —
+    // the access token may still be valid even if we don't know its expiry.
+    Long expiresAt = state.tokenExpiresAt ?: 0
+    boolean expiryKnown = expiresAt > 1000000000000L
+    if (!expiryKnown && state.refreshToken) {
+        log.warn "Token expiry unknown during poll — triggering recovery via discoverDevices"
+        safeRunIn(1, "discoverDevices")
+        return
+    }
+    
+    getChildDevices().each { childDev ->
+        String deviceId = childDev.deviceNetworkId
+        log.debug "Polling device: ${deviceId}"
+        // Pass the deviceId as callback data so devicePollHandler can look up
+        // the child device without having to parse it from the response body.
+        authenticatedHttpGet("/v1/devices/${deviceId}", "devicePollHandler", [data: [deviceId: deviceId]])
+    }
 }
 
 def getOptimalPollingInterval() {
@@ -647,23 +745,56 @@ def getOptimalPollingInterval() {
 
 def devicePollHandler(response, data) {
     if (response.hasError()) {
-        log.warn "Error polling device: ${response.getErrorMessage()}"
+        Integer status = response.status
+        String errorMsg = response.getErrorMessage()
+        
+        // 401 means the token is genuinely expired — refresh and the next poll cycle will recover
+        if (status == 401) {
+            log.warn "Poll returned 401 — token expired. Triggering refresh."
+            state.tokenExpiresAt = 0  // Mark as unknown so forceTokenRefresh is used
+            forceTokenRefresh()
+            return
+        }
+        log.warn "Error polling device: ${errorMsg} (HTTP ${status})"
         return
     }
     
     if (response.status == 200) {
         try {
             def deviceData = new JsonSlurper().parseText(response.data)
-            String deviceId = deviceData.ident?.deviceIdentLabel?.fabNumber
             
-            if (deviceId) {
+            // The Miele API wraps the single-device response under the device ID key,
+            // e.g. { "000187642328": { ident: {...}, state: {...} } }
+            // We passed the deviceId in callback data — use it to unwrap the response.
+            String deviceId = data?.deviceId
+            
+            Map singleDeviceData = null
+            if (deviceId && deviceData instanceof Map && deviceData.containsKey(deviceId)) {
+                singleDeviceData = deviceData[deviceId]
+            } else if (deviceData instanceof Map && deviceData.size() == 1) {
+                // Fallback: unwrap the only key present
+                deviceId = deviceData.keySet().first()
+                singleDeviceData = deviceData[deviceId]
+            } else {
+                // Last resort: treat the whole response as device data
+                singleDeviceData = deviceData
+            }
+            
+            if (deviceId && singleDeviceData) {
                 def child = getChildDevice(deviceId)
                 if (child) {
-                    Map stateMap = buildStateMap(deviceData)
+                    Map stateMap = buildStateMap(singleDeviceData)
                     if (stateMap && !stateMap.isEmpty()) {
                         child.receiveMieleState(stateMap)
+                    } else {
+                        log.warn "No state data to send to device ${deviceId}"
                     }
+                } else {
+                    log.warn "No child device found for polled device ID: ${deviceId}"
                 }
+            } else {
+                log.warn "Could not determine device ID from poll response"
+                log.debug "Poll response data: ${response.data}"
             }
         } catch (Exception e) {
             log.error "Error parsing device poll response: ${e.message}"
@@ -679,16 +810,31 @@ def discoverDevices() {
         return
     }
     
+    // Detect corrupted/missing tokenExpiresAt (e.g. after hub reboot or state reset)
+    // and recover by triggering a token refresh before proceeding.
+    Long expiresAt = state.tokenExpiresAt ?: 0
+    boolean expiryKnown = expiresAt > 1000000000000L  // Sanity: must be after year 2001
+    if (!expiryKnown) {
+        // If we have no refresh token, we can't recover automatically — stop looping
+        if (!state.refreshToken) {
+            log.error "❌ Token expiry unknown AND no refresh token available."
+            log.error "The access token (${state.accessToken?.take(20)}...) may still be valid — attempting request anyway."
+            log.error "If this fails with 401, you must re-authorize the app."
+            // Fall through and attempt the request — if the access token is still valid
+            // (Miele tokens last 24h), the request will succeed even without a known expiry.
+        } else {
+            log.warn "⚠️ Token expiry is unknown (state.tokenExpiresAt = ${expiresAt}). Triggering token refresh to recover."
+            log.warn "Discovery will proceed in 35 seconds after token refresh completes."
+            forceTokenRefresh()
+            safeRunIn(35, "discoverDevices")
+            return
+        }
+    }
+    
     state.lastDiscoveryAttempt = now()
     
-    log.info "Using access token: ${state.accessToken?.take(20)}..."
-    log.info "Current time: ${new Date(now())}"
-    log.info "Token expires at: ${new Date(state.tokenExpiresAt ?: 0)}"
-    log.info "Time until expiry: ${Math.round(((state.tokenExpiresAt ?: 0) - now()) / 60000)} minutes"
-    log.info "Token is ${now() < (state.tokenExpiresAt ?: 0) ? 'VALID' : 'EXPIRED'}"
-    log.info "API endpoint: ${MIELE_API_BASE}${MIELE_DEVICES_PATH}"
-    log.info "Authorization header: Bearer ${state.accessToken?.take(20)}..."
-    log.info "Making authenticated GET request..."
+    log.info "Token expires at: ${new Date(expiresAt)} (${Math.round((expiresAt - now()) / 60000)} min remaining)"
+    log.info "Making authenticated GET request to: ${MIELE_API_BASE}${MIELE_DEVICES_PATH}"
     
     authenticatedHttpGet("/v1/devices", "discoverDevicesHandler")
 }
@@ -699,16 +845,20 @@ def discoverDevicesHandler(response, data) {
     
     if (response.hasError()) {
         log.error "❌ Error in device discovery: ${response.getErrorMessage()}"
-        log.error "Response status: ${response.status}"
-        log.error "Response headers: ${response.headers}"
         
-        if (response.status == 503) {
-            log.error "Miele API is temporarily unavailable (503). Will retry in 30 seconds."
-            runIn(30, "discoverDevices")
-        } else if (response.status == 401) {
-            log.error "Unauthorized (401). Token may be invalid. Try re-authorizing."
+        if (response.status == 401) {
+            // Token is genuinely expired — refresh it and retry discovery
+            log.warn "401 Unauthorized — token expired. Refreshing token and retrying discovery in 35 seconds."
+            state.tokenExpiresAt = 0  // Mark as unknown so recovery path triggers
+            forceTokenRefresh()
+            safeRunIn(35, "discoverDevices")
+        } else if (response.status == 503) {
+            log.error "Miele API temporarily unavailable (503). Retrying in 30 seconds."
+            safeRunIn(30, "discoverDevices")
         } else if (response.status == 404) {
             log.error "Not Found (404). Check if the endpoint is correct."
+        } else {
+            log.error "Response status: ${response.status}"
         }
         return
     }
@@ -752,7 +902,19 @@ def discoverDevicesHandler(response, data) {
             if (getChildDevices()) {
                 manageChildDevices()
             }
-            startEventStream()
+            
+            // Only attempt SSE if it hasn't already been confirmed unavailable.
+            // If SSE is unavailable, ensure the polling loop is running instead.
+            if (state.sseConnectionState == "unavailable") {
+                log.debug "SSE previously confirmed unavailable — ensuring polling loop is active"
+                // Only reschedule if not already scheduled (avoid duplicate loops)
+                if (!state.pollScheduled) {
+                    state.pollScheduled = true
+                    safeRunIn(POLLING_INTERVAL_SEC, "pollDeviceStates")
+                }
+            } else {
+                startEventStream()
+            }
         } catch (Exception e) {
             log.error "Error parsing device discovery response: ${e.message}"
             log.debug "Raw response data: ${response.data}"
@@ -815,6 +977,10 @@ def startEventStream() {
         log.warn "Cannot start event stream - no access token available"
         return
     }
+    
+    // Cancel any existing polling loop before attempting SSE so we don't
+    // end up with both running simultaneously.
+    unschedule("pollDeviceStates")
     
     log.info "Starting Miele event stream..."
     state.sseRetryCount = state.sseRetryCount ?: 0
@@ -1072,26 +1238,28 @@ private void handleEventStreamError(String errorMsg) {
         state.sseConnectionState = "unavailable"
         state.sseRetryCount = 0
         
-        // Don't retry SSE if it's not available
-        // Set up periodic polling as fallback (every 5 minutes)
-        log.info "Setting up periodic polling (every 5 minutes) as fallback"
-        runIn(300, "pollDeviceStates")
+        // Don't retry SSE if it's not available.
+        // Cancel any stale scheduled poll and start a fresh polling loop.
+        unschedule("pollDeviceStates")
+        log.info "Setting up periodic polling (every ${POLLING_INTERVAL_SEC} seconds) as fallback"
+        safeRunIn(POLLING_INTERVAL_SEC, "pollDeviceStates")
         return
     }
     
-    // For other errors, retry with backoff
+    // For other errors, retry SSE with backoff up to 3 times, then fall back to polling.
     if (state.sseRetryCount <= 3) {
         // Exponential backoff: 30s, 60s, 120s
         Integer delaySeconds = Math.min(30 * Math.pow(2, state.sseRetryCount - 1), 120) as Integer
         log.info "Reconnecting event stream in ${delaySeconds} seconds (attempt ${state.sseRetryCount}/3)"
-        runIn(delaySeconds, "startEventStream")
+        safeRunIn(delaySeconds, "startEventStream")
     } else {
         log.warn "⚠️ Event stream failed after 3 attempts"
         log.warn "Setting up periodic polling as fallback"
         state.sseConnectionState = "unavailable"
         
-        // Set up periodic polling as fallback (every 5 minutes)
-        runIn(300, "pollDeviceStates")
+        // Cancel any stale scheduled poll and start a fresh polling loop.
+        unschedule("pollDeviceStates")
+        safeRunIn(POLLING_INTERVAL_SEC, "pollDeviceStates")
     }
 }
 
@@ -1173,36 +1341,30 @@ private void authenticatedHttpGet(String path, String callback, Map options = [:
         return
     }
     
-    // Check if token needs refresh before making request
-    // Add safety check to prevent infinite refresh loops
-    if (now() >= (state.tokenExpiresAt ?: 0)) {
-        Long lastRefreshAttempt = state.lastTokenRefreshAttempt ?: 0
-        Long timeSinceLastAttempt = now() - lastRefreshAttempt
-        
-        // Only attempt refresh if we haven't tried recently
-        if (timeSinceLastAttempt > (TOKEN_EXPIRY_CHECK_MIN_INTERVAL_SEC * 1000)) {
-            log.warn "Token expired (expires: ${new Date(state.tokenExpiresAt ?: 0)}), attempting refresh"
-            state.lastTokenRefreshAttempt = now()
-            tokenRefreshJob()
-            runIn(5, "retryAuthenticatedRequest", [data: [path: path, callback: callback, options: options]])
-            return
-        } else {
-            log.error "Token refresh attempted too recently (${timeSinceLastAttempt}ms ago). Skipping to prevent loop."
-            log.error "Please re-authorize the app if token refresh continues to fail."
-            return
-        }
+    // Only proactively refresh when we have a KNOWN valid expiry that is actually close/past.
+    // If tokenExpiresAt is 0 or missing (e.g. after a hub reboot or state corruption), skip
+    // the proactive check entirely and just make the request — the API will return 401 if the
+    // token is genuinely expired, and the 401 handler will trigger a proper refresh.
+    Long expiresAt = state.tokenExpiresAt ?: 0
+    boolean expiryKnown = expiresAt > 1000000000000L  // Sanity: must be after year 2001
+    
+    if (expiryKnown && now() >= expiresAt) {
+        log.warn "Token is known-expired (expires: ${new Date(expiresAt)}), refreshing before request"
+        // Kick off async refresh and schedule a retry AFTER the refresh has had time to complete.
+        // Do NOT call tokenRefreshJob() here — it has its own throttle that will block us.
+        // Instead call the underlying refresh directly, bypassing the throttle.
+        forceTokenRefresh()
+        // Retry after 35 seconds — enough time for the async token exchange to complete
+        safeRunIn(35, "retryAuthenticatedRequest", [data: [path: path, callback: callback, callbackData: options.data]])
+        return
     }
     
-    // Build Authorization header with Bearer token
-    String authHeader = "Bearer ${state.accessToken}"
-    
     Map headers = [
-        "Authorization": authHeader,
+        "Authorization": "Bearer ${state.accessToken}",
         "Accept": "application/json",
         "User-Agent": "Hubitat-Miele-Integration/1.0"
     ]
     
-    // Log token format for debugging (first 20 chars only)
     log.debug "Authorization header: Bearer ${state.accessToken?.take(20)}..."
     
     if (options.handleSse) {
@@ -1218,22 +1380,105 @@ private void authenticatedHttpGet(String path, String callback, Map options = [:
         timeout: options.handleSse ? 0 : 30
     ]
     
-    log.info "Making authenticated GET request to: ${MIELE_API_BASE}${path}"
+    log.debug "Making authenticated GET request to: ${MIELE_API_BASE}${path}"
     
     try {
         asynchttpGet(callback, requestParams, options.data)
-        log.info "HTTP GET request sent successfully, waiting for response..."
     } catch (Exception e) {
-        log.error "❌ Error making HTTP GET request: ${e.message}"
-        log.error "Exception details: ${e}"
+        log.error "❌ Error making HTTP GET request to ${path}: ${e.message}"
         if (options.handleSse) {
             handleEventStreamError("Failed to initiate SSE connection: ${e.message}")
         }
     }
 }
 
-def retryAuthenticatedRequest(data) {
-    authenticatedHttpGet(data.path, data.callback, data.options)
+// Retry a previously deferred GET request (called via runIn after a token refresh)
+def retryAuthenticatedRequest(Map data) {
+    String path = data?.path
+    String callback = data?.callback
+    def callbackData = data?.callbackData  // may be null
+    
+    if (!path || !callback) {
+        log.error "retryAuthenticatedRequest: missing path or callback in data: ${data}"
+        return
+    }
+    
+    if (!state.accessToken) {
+        log.error "retryAuthenticatedRequest: still no access token after refresh — re-authorization required"
+        return
+    }
+    
+    Long expiresAt = state.tokenExpiresAt ?: 0
+    boolean expiryKnown = expiresAt > 1000000000000L
+    if (expiryKnown && now() >= expiresAt) {
+        log.error "retryAuthenticatedRequest: token still expired after refresh attempt — re-authorization may be required"
+        return
+    }
+    
+    log.info "Retrying deferred request: ${path}"
+    Map headers = [
+        "Authorization": "Bearer ${state.accessToken}",
+        "Accept": "application/json",
+        "User-Agent": "Hubitat-Miele-Integration/1.0"
+    ]
+    Map requestParams = [
+        uri: MIELE_API_BASE,
+        path: path,
+        headers: headers,
+        timeout: 30
+    ]
+    try {
+        asynchttpGet(callback, requestParams, callbackData)
+    } catch (Exception e) {
+        log.error "Error retrying request to ${path}: ${e.message}"
+    }
+}
+
+// Force a token refresh, bypassing the throttle guard in tokenRefreshJob.
+// Used when we proactively detect expiry before making a request.
+private void forceTokenRefresh() {
+    if (!settings?.clientId || !settings?.clientSecret) {
+        log.error "Cannot refresh token — missing client credentials. Re-authorization required."
+        log.error "Go to the app settings and complete OAuth authorization."
+        return
+    }
+    
+    if (!state.refreshToken) {
+        log.error "❌ Cannot refresh token — refresh token is missing from state!"
+        log.error "This usually means the OAuth flow never completed successfully."
+        log.error "Please re-authorize the app:"
+        log.error "1. Go to Apps → Miele Connect Manager"
+        log.error "2. Click 'Authorize Miele Account'"
+        log.error "3. Complete the OAuth flow"
+        log.error "Current state.accessToken: ${state.accessToken ? 'present' : 'MISSING'}"
+        log.error "Current state.refreshToken: ${state.refreshToken ? 'present' : 'MISSING'}"
+        return
+    }
+    
+    log.info "Forcing token refresh (proactive expiry detected)"
+    log.debug "Using refresh token: ${state.refreshToken?.take(20)}..."
+    state.lastTokenRefreshAttempt = now()
+    state.tokenRefreshAttempts = (state.tokenRefreshAttempts ?: 0) + 1
+    
+    def tokenParams = [
+        "grant_type": "refresh_token",
+        "refresh_token": state.refreshToken,
+        "client_id": settings.clientId,
+        "client_secret": settings.clientSecret
+    ]
+    String tokenEndpoint = (settings?.apiVersion == "legacy") ?
+        "${MIELE_AUTH_BASE_LEGACY}${MIELE_TOKEN_PATH_LEGACY}" :
+        "${MIELE_AUTH_BASE_NEW}${MIELE_TOKEN_PATH_NEW}"
+    
+    log.debug "Token refresh endpoint: ${tokenEndpoint}"
+    
+    asynchttpPost("tokenHandler", [
+        uri: tokenEndpoint,
+        body: toQueryString(tokenParams),
+        requestContentType: "application/x-www-form-urlencoded",
+        headers: ["Accept": "application/json", "User-Agent": "Hubitat-Miele-Integration/1.0"],
+        timeout: 30
+    ])
 }
 
 def refreshAppPage() {
